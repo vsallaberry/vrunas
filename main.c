@@ -47,8 +47,8 @@ static int usage(int ret, int argc, char *const* argv) {
 
 int main(int argc, char *const* argv) {
     char **         newargv;
-    uid_t           uid;
-    gid_t           gid;
+    uid_t           uid = 0;
+    gid_t           gid = 0;
     int             flags = 0;
     int             i_argv;
     int             i;
