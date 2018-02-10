@@ -1,0 +1,15 @@
+*.a
+*.class
+*.d
+*.o
+*~
+.*.swo
+.*.swp
+.clang_complete
+Build.java
+FlexLexer.h
+_src_.c
+build.h
+valgrind_*.log
+vrunas
+vrunas.dSYM
