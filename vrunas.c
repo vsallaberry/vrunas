@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2018 Vincent Sallaberry
- * vrunas
+ * vrunas <https://github.com/vsallaberry/vrunas>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -36,9 +36,16 @@
 const char *const* vrunas_get_source();
 #endif
 
-static int usage(int ret, int argc, char *const* argv) {
+typedef struct {
+    int                 argc;
+    char *const*        argv;
+    char *              buf;
+    size_t              bufsz;
+} ctx_t;
+
+static int usage(int ret, ctx_t * ctx) {
     FILE * out = ret ? stderr : stdout;
-    fprintf(out, "\nUsage: %s [-u uid|user] [-g gid|group] [-U user] [-G group]"
+    fprintf(out, "Usage: %s [-h] [-u uid|user] [-g gid|group] [-U user] [-G group]"
 #                             ifdef APP_INCLUDE_SOURCE
                               " [-s]"
 #                             endif
@@ -56,8 +63,10 @@ static int usage(int ret, int argc, char *const* argv) {
 #           ifdef _TEST
             "  -T           : run tests\n"
 #           endif
-            "\n", *argv);
-    (void)argc;
+            "  -h           : help\n"
+            "\n", (ctx && ctx->argv ? *ctx->argv : "vrunas"));
+    if (ctx && ctx->buf)
+        free(ctx->buf);
     return ret;
 }
 
@@ -69,7 +78,13 @@ static int nam2id_alloc_r(char ** pbuf, size_t * pbufsz) {
     if (pbuf == NULL || pbufsz == NULL)
         return -1;
     if (*pbuf == NULL) {
-        *pbufsz = 16384;
+        static const int    confs[] = { _SC_GETPW_R_SIZE_MAX, _SC_GETGR_R_SIZE_MAX };
+        int                 size = 0, ret;
+        for (size_t i = 0; i < sizeof(confs); i++) {
+            if ((ret = sysconf(confs[i])) > size)
+                size = ret;
+        }
+        *pbufsz = (size > 0 ? size : 16384);
         *pbuf = malloc(*pbufsz);
     }
     return *pbuf ? 0 : -1;
@@ -80,9 +95,9 @@ static int nam2id_alloc_r(char ** pbuf, size_t * pbufsz) {
  * @param str the user_name to look for
  * @param uid the resulting uid
  * @param pbuf the pointer to buffer used by getpwnam_r. if NULL it is malloced and
- *             freed, if not null and allocated it is used, if not null and not
- *             allocated it is malloced. When pbuf not null, the caller must free it.
- * @param pbufsz the pointer to size of *puf
+ *             freed, if not null and allocated, it is used, if not null and not
+ *             allocated, it is malloced. When pbuf not null, the caller must free *pbuf.
+ * @param pbufsz the pointer to size of *pbuf
  * @return 0 on success (str, *uid, *pbuf and *pbufsz usable, -1 otherwise)
  */
 static int pwnam2id_r(const char * str, uid_t *uid, char ** pbuf, size_t * pbufsz) {
@@ -100,17 +115,19 @@ static int pwnam2id_r(const char * str, uid_t *uid, char ** pbuf, size_t * pbufs
 
     if (((str == NULL || uid == NULL) && (errno = EINVAL))
     ||  getpwnam_r(str, &pwd, *pbuf, *pbufsz, &pwdres) != 0
-    ||  (pwdres == NULL && (errno = ENOENT))) {
+    ||  (pwdres == NULL && (errno = ESRCH))) {
         fprintf(stderr, "`%s` (", str); perror("getpwnam_r)");
     } else {
         ret = errno = 0;
-        *uid = pwd.pw_uid;
+        *uid = pwdres->pw_uid;
     }
     if (pbuf == &buf)
         free(*pbuf);
     return ret;
 }
 
+/** grnam2id_r(): wrapper to getgrnam_r() with automatic memory allocation.
+ * See pwnam2id_r() */
 static int grnam2id_r(const char * str, gid_t *gid, char ** pbuf, size_t * pbufsz) {
     struct group        pwd;
     struct group *      pwdres;
@@ -126,11 +143,11 @@ static int grnam2id_r(const char * str, gid_t *gid, char ** pbuf, size_t * pbufs
 
     if (((str == NULL || gid == NULL) && (errno = EINVAL))
     ||  getgrnam_r(str, &pwd, *pbuf, *pbufsz, &pwdres) != 0
-    ||  (pwdres == NULL && (errno = ENOENT))) {
+    ||  (pwdres == NULL && (errno = ESRCH))) {
         fprintf(stderr, "`%s` (", str); perror("getgrnam_r)");
     } else {
         ret = errno = 0;
-        *gid = pwd.gr_gid;
+        *gid = pwdres->gr_gid;
     }
     if (pbuf == &buf)
         free(*pbuf);
@@ -138,14 +155,24 @@ static int grnam2id_r(const char * str, gid_t *gid, char ** pbuf, size_t * pbufs
 }
 
 int main(int argc, char *const* argv) {
+    ctx_t           ctx = { argc, argv, NULL, 0 };
     char **         newargv;
-    char *          buf = NULL;
-    size_t          bufsz;
     uid_t           uid = 0;
     gid_t           gid = 0;
     int             flags = 0;
     int             i_argv;
     int             i;
+
+    fprintf(stderr, "%s v%s built on %s, %s from git-rev %s\n",
+#           ifdef HAVE_VERSION_H
+            BUILD_APPNAME, APP_VERSION, __DATE__, __TIME__, BUILD_GITREV
+#           else
+            "vrunas", "?", __DATE__, __TIME__, "?"
+#           endif
+            );
+    fprintf(stderr, "Copyright (C) 2018 Vincent Sallaberry.\n"
+            "This is free software; see the source for copying conditions.  There is NO\n"
+            "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n");
 
     for (i_argv = 1; i_argv < argc; i_argv++) {
         if (*argv[i_argv] == '-') {
@@ -155,38 +182,40 @@ int main(int argc, char *const* argv) {
                     uid_t   tmpuid;
                     gid_t   tmpgid;
                     case 'u':
+                        if (++i_argv >= argc || arg[1])
+                            return usage(18, &ctx);
+                        errno = 0;
+                        tmpuid = strtol(argv[i_argv], &endptr, 0);
+                        if ((errno != 0 || !endptr || *endptr != 0)
+                        && pwnam2id_r(argv[i_argv], &uid, &ctx.buf, &ctx.bufsz) != 0)
+                            return usage(17, &ctx);
+                        flags |= HAVE_UID;
+                        break ;
                     case 'U':
                         if (++i_argv >= argc || arg[1])
-                            return usage(14, argc, argv);
-                        errno = 0;
-                        if (*arg == 'u')
-                            tmpuid = strtol(argv[i_argv], &endptr, 0);
-                        if (((!endptr || *endptr != 0) && pwnam2id_r(argv[i_argv], &tmpuid, NULL, NULL) != 0) || errno != 0)
-                            return usage(13, argc, argv);
-                        if (*arg == 'u') {
-                            flags |= HAVE_UID;
-                            uid = tmpuid;
-                        } else {
-                            flags |= OPTIONAL_ARGS;
-                            fprintf(stdout, "%lu\n", (unsigned long) tmpuid);
-                        }
+                            return usage(16, &ctx);
+                        if (pwnam2id_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
+                            return usage(15, &ctx);
+                        flags |= OPTIONAL_ARGS;
+                        fprintf(stdout, "%lu\n", (unsigned long) tmpuid);
                         break ;
                     case 'g':
+                        if (++i_argv >= argc || arg[1])
+                            return usage(14, &ctx);
+                        errno = 0;
+                        tmpuid = strtol(argv[i_argv], &endptr, 0);
+                        if ((errno != 0 || !endptr || *endptr != 0)
+                        && grnam2id_r(argv[i_argv], &gid, &ctx.buf, &ctx.bufsz) != 0)
+                            return usage(13, &ctx);
+                        flags |= HAVE_GID;
+                        break ;
                     case 'G':
                         if (++i_argv >= argc || arg[1])
-                            return usage(12, argc, argv);
-                        errno = 0;
-                        if (*arg == 'g')
-                            tmpgid = strtol(argv[i_argv], &endptr, 0);
-                        if (((!endptr || *endptr != 0) && grnam2id_r(argv[i_argv], &tmpgid, NULL, NULL) != 0) || errno != 0)
-                            return usage(11, argc, argv);
-                        if (*arg == 'g') {
-                            flags |= HAVE_GID;
-                            gid = tmpgid;
-                        } else {
-                            flags |= OPTIONAL_ARGS;
-                            fprintf(stdout, "%lu\n", (unsigned long) tmpgid);
-                        }
+                            return usage(12, &ctx);
+                        if (grnam2id_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
+                            return usage(11, &ctx);
+                        flags |= OPTIONAL_ARGS;
+                        fprintf(stdout, "%lu\n", (unsigned long) tmpgid);
                         break ;
 #                   ifdef APP_INCLUDE_SOURCE
                     case 's':
@@ -197,15 +226,15 @@ int main(int argc, char *const* argv) {
 #                   ifdef _TEST
                     case 'T': break ;
 #                   endif
-                    case 'h': return usage(0, argc, argv);
-                    default:  return usage(10, argc, argv);
+                    case 'h': return usage(0, &ctx);
+                    default:  return usage(10, &ctx);
                 }
             }
         } else break ;
     }
     /* free resources */
-    if (buf)
-        free(buf);
+    if (ctx.buf)
+        free(ctx.buf);
     /* error if program is mandatory */
     if (i_argv >= argc) {
         if ((flags & OPTIONAL_ARGS) != 0)
