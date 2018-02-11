@@ -43,11 +43,12 @@ typedef struct {
     size_t              bufsz;
 } ctx_t;
 
-static void clean_ctx(ctx_t * ctx) {
+static int clean_ctx(int ret, ctx_t * ctx) {
     if (ctx && ctx->buf) {
         free(ctx->buf);
         ctx->buf = NULL;
     }
+    return ret;
 }
 
 static int usage(int ret, ctx_t * ctx) {
@@ -72,8 +73,7 @@ static int usage(int ret, ctx_t * ctx) {
 #           endif
             "  -h           : help\n"
             "\n", (ctx && ctx->argv ? *ctx->argv : "vrunas"));
-    clean_ctx(ctx);
-    return ret;
+    return clean_ctx(ret, ctx);
 }
 
 #define HAVE_UID        1 << 0
@@ -119,10 +119,10 @@ static int pwnam2id_r(const char * str, uid_t *uid, char ** pbuf, size_t * pbufs
         return -1;
     }
 
-    if (((str == NULL || uid == NULL) && (errno = EINVAL))
+    if (((str == NULL || uid == NULL) && (errno = EFAULT))
     ||  getpwnam_r(str, &pwd, *pbuf, *pbufsz, &pwdres) != 0
-    ||  (pwdres == NULL && (errno = ESRCH))) {
-        fprintf(stderr, "`%s` (", str); perror("getpwnam_r)");
+    ||  (pwdres == NULL && (errno = EINVAL))) {
+        fprintf(stderr, "user `%s` (", str); perror("getpwnam_r)");
     } else {
         ret = errno = 0;
         *uid = pwdres->pw_uid;
@@ -147,10 +147,10 @@ static int grnam2id_r(const char * str, gid_t *gid, char ** pbuf, size_t * pbufs
         return -1;
     }
 
-    if (((str == NULL || gid == NULL) && (errno = EINVAL))
+    if (((str == NULL || gid == NULL) && (errno = EFAULT))
     ||  getgrnam_r(str, &pwd, *pbuf, *pbufsz, &pwdres) != 0
-    ||  (pwdres == NULL && (errno = ESRCH))) {
-        fprintf(stderr, "`%s` (", str); perror("getgrnam_r)");
+    ||  (pwdres == NULL && (errno = EINVAL))) {
+        fprintf(stderr, "group `%s` (", str); perror("getgrnam_r)");
     } else {
         ret = errno = 0;
         *gid = pwdres->gr_gid;
@@ -196,7 +196,7 @@ int main(int argc, char *const* argv) {
                         tmpuid = strtol(argv[i_argv], &endptr, 0);
                         if ((errno != 0 || !endptr || *endptr != 0)
                         && pwnam2id_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
-                            return usage(17, &ctx);
+                            return clean_ctx(17, &ctx);
                         flags |= HAVE_UID;
                         uid = tmpuid;
                         break ;
@@ -204,7 +204,7 @@ int main(int argc, char *const* argv) {
                         if (++i_argv >= argc || arg[1])
                             return usage(16, &ctx);
                         if (pwnam2id_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
-                            return usage(15, &ctx);
+                            return clean_ctx(15, &ctx);
                         flags |= OPTIONAL_ARGS;
                         fprintf(stdout, "%lu\n", (unsigned long) tmpuid);
                         break ;
@@ -217,7 +217,7 @@ int main(int argc, char *const* argv) {
                         tmpgid = strtol(argv[i_argv], &endptr, 0);
                         if ((errno != 0 || !endptr || *endptr != 0)
                         && grnam2id_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
-                            return usage(13, &ctx);
+                            return clean_ctx(13, &ctx);
                         flags |= HAVE_GID;
                         gid = tmpgid;
                         break ;
@@ -225,7 +225,7 @@ int main(int argc, char *const* argv) {
                         if (++i_argv >= argc || arg[1])
                             return usage(12, &ctx);
                         if (grnam2id_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
-                            return usage(11, &ctx);
+                            return clean_ctx(11, &ctx);
                         flags |= OPTIONAL_ARGS;
                         fprintf(stdout, "%lu\n", (unsigned long) tmpgid);
                         break ;
@@ -245,7 +245,7 @@ int main(int argc, char *const* argv) {
         } else break ;
     }
     /* free resources */
-    clean_ctx(&ctx);
+    clean_ctx(0, &ctx);
     /* error if program is mandatory */
     if (i_argv >= argc) {
         if ((flags & OPTIONAL_ARGS) != 0)
