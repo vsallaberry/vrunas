@@ -43,6 +43,13 @@ typedef struct {
     size_t              bufsz;
 } ctx_t;
 
+static void clean_ctx(ctx_t * ctx) {
+    if (ctx && ctx->buf) {
+        free(ctx->buf);
+        ctx->buf = NULL;
+    }
+}
+
 static int usage(int ret, ctx_t * ctx) {
     FILE * out = ret ? stderr : stdout;
     fprintf(out, "Usage: %s [-h] [-u uid|user] [-g gid|group] [-U user] [-G group]"
@@ -65,8 +72,7 @@ static int usage(int ret, ctx_t * ctx) {
 #           endif
             "  -h           : help\n"
             "\n", (ctx && ctx->argv ? *ctx->argv : "vrunas"));
-    if (ctx && ctx->buf)
-        free(ctx->buf);
+    clean_ctx(ctx);
     return ret;
 }
 
@@ -184,12 +190,15 @@ int main(int argc, char *const* argv) {
                     case 'u':
                         if (++i_argv >= argc || arg[1])
                             return usage(18, &ctx);
+                        if ((flags & HAVE_UID) != 0)
+                            fprintf(stderr, "warning, overriding previous `-u` parameter with new value `%s`\n", argv[i_argv]);
                         errno = 0;
                         tmpuid = strtol(argv[i_argv], &endptr, 0);
                         if ((errno != 0 || !endptr || *endptr != 0)
-                        && pwnam2id_r(argv[i_argv], &uid, &ctx.buf, &ctx.bufsz) != 0)
+                        && pwnam2id_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
                             return usage(17, &ctx);
                         flags |= HAVE_UID;
+                        uid = tmpuid;
                         break ;
                     case 'U':
                         if (++i_argv >= argc || arg[1])
@@ -202,12 +211,15 @@ int main(int argc, char *const* argv) {
                     case 'g':
                         if (++i_argv >= argc || arg[1])
                             return usage(14, &ctx);
+                        if ((flags & HAVE_GID) != 0)
+                            fprintf(stderr, "warning, overriding previous `-g` parameter with new value `%s`\n", argv[i_argv]);
                         errno = 0;
-                        tmpuid = strtol(argv[i_argv], &endptr, 0);
+                        tmpgid = strtol(argv[i_argv], &endptr, 0);
                         if ((errno != 0 || !endptr || *endptr != 0)
-                        && grnam2id_r(argv[i_argv], &gid, &ctx.buf, &ctx.bufsz) != 0)
+                        && grnam2id_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
                             return usage(13, &ctx);
                         flags |= HAVE_GID;
+                        gid = tmpgid;
                         break ;
                     case 'G':
                         if (++i_argv >= argc || arg[1])
@@ -233,14 +245,13 @@ int main(int argc, char *const* argv) {
         } else break ;
     }
     /* free resources */
-    if (ctx.buf)
-        free(ctx.buf);
+    clean_ctx(&ctx);
     /* error if program is mandatory */
     if (i_argv >= argc) {
         if ((flags & OPTIONAL_ARGS) != 0)
            return 0;
         fprintf(stderr, "error: missing program\n");
-        return 1;
+        return usage(1, &ctx);
     }
     /* set gid if given */
     if ((flags & HAVE_GID) != 0) {
