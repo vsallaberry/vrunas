@@ -85,8 +85,8 @@ static int nam2id_alloc_r(char ** pbuf, size_t * pbufsz) {
         return -1;
     if (*pbuf == NULL) {
         static const int    confs[] = { _SC_GETPW_R_SIZE_MAX, _SC_GETGR_R_SIZE_MAX };
-        int                 size = 0, ret;
-        for (size_t i = 0; i < sizeof(confs); i++) {
+        long                size = 0, ret;
+        for (size_t i = 0; i < sizeof(confs) / sizeof(*confs); i++) {
             if ((ret = sysconf(confs[i])) > size)
                 size = ret;
         }
