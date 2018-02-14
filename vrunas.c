@@ -32,9 +32,6 @@
 #ifdef HAVE_VERSION_H
 # include "version.h"
 #endif
-#ifdef APP_INCLUDE_SOURCE
-const char *const* vrunas_get_source();
-#endif
 
 typedef struct {
     int                 argc;
@@ -169,17 +166,17 @@ int main(int argc, char *const* argv) {
     int             i_argv;
     int             i;
 
-    fprintf(stderr, "%s v%s built on %s, %s from git-rev %s\n",
+    fprintf(stderr, "%s v%s %s built on %s, %s from git:%s\n\n",
 #           ifdef HAVE_VERSION_H
-            BUILD_APPNAME, APP_VERSION, __DATE__, __TIME__, BUILD_GITREV
+            BUILD_APPNAME, APP_VERSION, BUILD_APPRELEASE, __DATE__, __TIME__, BUILD_GITREV
 #           else
             "vrunas", "?", __DATE__, __TIME__, "?"
 #           endif
             );
     fprintf(stderr, "Copyright (C) 2018 Vincent Sallaberry.\n"
-            "This is free software; see the source for copying conditions.  There is NO\n"
-            "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n");
-
+            "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n" \
+            "This is free software: you are free to change and redistribute it.\n" \
+            "There is NO WARRANTY, to the extent permitted by law.\n\n");
     for (i_argv = 1; i_argv < argc; i_argv++) {
         if (*argv[i_argv] == '-') {
             for (const char * arg = argv[i_argv] + 1; *arg; arg++) {
