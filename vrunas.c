@@ -21,8 +21,10 @@
  */
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/times.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,36 +32,82 @@
 #include <errno.h>
 #include <pwd.h>
 #include <grp.h>
-#include <time.h>
 
 #ifdef HAVE_VERSION_H
 # include "version.h"
 #endif
 
+enum FLAGS {
+    HAVE_UID        = 1 << 0,
+    HAVE_GID        = 1 << 1,
+    OPTIONAL_ARGS   = 1 << 2,
+    TO_STDOUT       = 1 << 3,
+    TO_STDERR       = 1 << 4,
+    OUT_APPEND      = 1 << 5,
+    TIME            = 1 << 6,
+    TIMEEXT         = 1 << 7,
+};
+
+enum {
+    OK = 0,
+    ERR_PROG_MISSING = 1,
+    ERR_SETID = 2,
+    ERR_BUILDARGV = 4,
+    ERR_EXEC = 5,
+    ERR_REDIR = 6,
+    ERR_SETOUT = 7,
+    ERR_BENCH = 8,
+    ERR_OPTION = 10,
+    ERR = -1,
+    ERR_NOT_REACHABLE = -128,
+};
+
 typedef struct {
+    int                 flags;
     int                 argc;
     char *const*        argv;
     char *              buf;
     size_t              bufsz;
-    int                 outfd;
+    FILE *              alternatefile;  /* file not used for application output, can be used to display bench */
+    int                 outfd;          /* fd of file receving program output, -1 if stdout or stderr */
 } ctx_t;
 
 static int clean_ctx(int ret, ctx_t * ctx) {
     if (ctx) {
-       if (ctx->buf) {
+        if (ctx->buf) {
             free(ctx->buf);
             ctx->buf = NULL;
-       }
-       if (ctx->outfd >= 0) {
-           close(ctx->outfd);
-           ctx->outfd = -1;
-       }
+        }
+        if (ctx->alternatefile != NULL) {
+            fclose(ctx->alternatefile);
+            ctx->alternatefile = NULL;
+        }
+        if (ctx->outfd >= 0) {
+            close(ctx->outfd);
+            ctx->outfd = -1;
+        }
     }
     return ret;
 }
 
+static void header(FILE * out) {
+    fprintf(out, "%s v%s %s built on %s, %s from git:%s\n\n",
+#           ifdef HAVE_VERSION_H
+            BUILD_APPNAME, APP_VERSION, BUILD_APPRELEASE, __DATE__, __TIME__, BUILD_GITREV
+#           else
+            "vrunas", "?", __DATE__, __TIME__, "?"
+#           endif
+            );
+    fprintf(out, "Copyright (C) 2018 Vincent Sallaberry.\n"
+            "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n" \
+            "This is free software: you are free to change and redistribute it.\n" \
+            "There is NO WARRANTY, to the extent permitted by law.\n\n");
+}
+
 static int usage(int ret, ctx_t * ctx) {
     FILE * out = ret ? stderr : stdout;
+
+    header(out);
     fprintf(out, "Usage: %s [-h] [-u uid|user] [-g gid|group] [-U user] [-G group] [-t|-T] [-1|-2] [-o|-O file]"
 #                             ifdef APP_INCLUDE_SOURCE
                               " [-s]"
@@ -88,31 +136,6 @@ static int usage(int ret, ctx_t * ctx) {
     return clean_ctx(ret, ctx);
 }
 
-enum FLAGS {
-    HAVE_UID        = 1 << 0,
-    HAVE_GID        = 1 << 1,
-    OPTIONAL_ARGS   = 1 << 2,
-    TO_STDOUT       = 1 << 3,
-    TO_STDERR       = 1 << 4,
-    OUT_APPEND      = 1 << 5,
-    TIME            = 1 << 6,
-    TIMEEXT         = 1 << 7,
-};
-
-enum {
-    OK = 0,
-    ERR_PROG_MISSING = 1,
-    ERR_SETID = 2,
-    ERR_BUILDARGV = 4,
-    ERR_EXEC = 5,
-    ERR_REDIR = 6,
-    ERR_SETOUT = 7,
-    ERR_BENCH = 8,
-    ERR_OPTION = 10,
-    ERR = -1,
-    ERR_NOT_REACHABLE = -128,
-};
-
 static int nam2id_alloc_r(char ** pbuf, size_t * pbufsz) {
     if (pbuf == NULL || pbufsz == NULL)
         return -1;
@@ -124,7 +147,8 @@ static int nam2id_alloc_r(char ** pbuf, size_t * pbufsz) {
                 size = ret;
         }
         *pbufsz = (size > 0 ? size : 16384);
-        *pbuf = malloc(*pbufsz);
+        if ((*pbuf = malloc(*pbufsz)) == NULL)
+            fprintf(stderr, "nam2id_alloc(malloc): %s\n", strerror(errno));
     }
     return *pbuf ? 0 : -1;
 }
@@ -155,7 +179,7 @@ static int pwnam2id_r(const char * str, uid_t *uid, char ** pbuf, size_t * pbufs
     if (((str == NULL || uid == NULL) && (errno = EFAULT))
     ||  getpwnam_r(str, &pwd, *pbuf, *pbufsz, &pwdres) != 0
     ||  (pwdres == NULL && (errno = EINVAL))) {
-        fprintf(stderr, "user `%s` (", str); perror("getpwnam_r)");
+        fprintf(stderr, "user `%s` (getpwnam_r): %s\n", str, strerror(errno));
     } else {
         ret = errno = 0;
         *uid = pwdres->pw_uid;
@@ -183,7 +207,7 @@ static int grnam2id_r(const char * str, gid_t *gid, char ** pbuf, size_t * pbufs
     if (((str == NULL || gid == NULL) && (errno = EFAULT))
     ||  getgrnam_r(str, &pwd, *pbuf, *pbufsz, &pwdres) != 0
     ||  (pwdres == NULL && (errno = EINVAL))) {
-        fprintf(stderr, "group `%s` (", str); perror("getgrnam_r)");
+        fprintf(stderr, "group `%s` (getgrnam_r): %s\n", str, strerror(errno));
     } else {
         ret = errno = 0;
         *gid = pwdres->gr_gid;
@@ -193,29 +217,30 @@ static int grnam2id_r(const char * str, gid_t *gid, char ** pbuf, size_t * pbufs
     return ret;
 }
 
-int set_uidgid(int flags, uid_t uid, gid_t gid) {
+int set_uidgid(uid_t uid, gid_t gid, ctx_t * ctx) {
     /* set gid if given */
-    if ((flags & HAVE_GID) != 0) {
+    if ((ctx->flags & HAVE_GID) != 0) {
         if (setgid(gid) < 0) {
-            fprintf(stderr, "`%lu` (", (unsigned long) gid); perror("setgid)");
+            fprintf(stderr, "`%lu` (setgid): %s\n", (unsigned long) gid, strerror(errno));
             return ERR_SETID;
         } else fprintf(stderr, "setting gid to %u\n", gid);
     }
     /* set uid if given */
-    if ((flags & HAVE_UID) != 0) {
+    if ((ctx->flags & HAVE_UID) != 0) {
         if (setuid(uid) < 0) {
-            fprintf(stderr, "`%lu` (", (unsigned long) uid); perror("setuid)");
+            fprintf(stderr, "`%lu` (setuid): %s\n", (unsigned long) uid, strerror(errno));
             return ERR_SETID;
         } else fprintf(stderr, "setting uid to %u\n", uid);
     }
     return 0;
 }
 
-char ** build_argv(int argc, char * const * argv) {
-    char ** newargv, **tmp;;
+char ** build_argv(int argc, char * const * argv, ctx_t * ctx) {
+    char ** newargv, ** tmp;
+    (void)ctx;
 
     if ((tmp = newargv = malloc(argc + 1)) == NULL) {
-        perror("malloc argv for execvp");
+        fprintf(stderr, "build_argv(malloc) : %s\n", strerror(errno));
         return NULL;
     }
     while (argc--)  {
@@ -225,29 +250,66 @@ char ** build_argv(int argc, char * const * argv) {
     return newargv;
 }
 
-int set_dups(int flags) {
-    if ((flags & TO_STDOUT) != 0 && dup2(STDERR_FILENO, STDOUT_FILENO) < 0)
-        perror("dup2 2>&1");
-    if ((flags & TO_STDERR) != 0 && dup2(STDOUT_FILENO, STDERR_FILENO) < 0)
-        perror("dup2 1>&2");
+int set_redirections(ctx_t * ctx) {
+    int backupfd;
+    int dupfd;
+    int redirectedfd = -1;
+
+    /* If bench is ON, we want it alone on its output so as it is easy for shell
+     * scripts to catch (ctx->alternate file) */
+    /* With '-2', stdout is redirected to stderr. If bench is ON,
+     * it is displayed on the real stdout (ctx->alternatefile) */
+    if ((ctx->flags & TO_STDERR) != 0) {
+        dupfd = STDERR_FILENO;
+        redirectedfd = STDOUT_FILENO;
+    }
+    /* Else, with '-1' or if bench is ON, stderr is redirected to stdout, and
+     * bench is displayed on the real stderr (ctx->alternatefile) */
+    else if ((ctx->flags & TO_STDOUT) != 0  || (ctx->flags & (TIME | TIMEEXT)) != 0) {
+        dupfd = STDOUT_FILENO;
+        redirectedfd = STDERR_FILENO;
+    }
+    if (redirectedfd >= 0) {
+        /* make a backup of stderr */
+        if ((backupfd = dup(redirectedfd)) < 0) {
+            /* error TODO */
+            return -1;
+        }
+        if ((ctx->alternatefile = fdopen(backupfd, "w")) == NULL) {
+            /* error TODO */
+            return -1;
+        }
+        /* redirect stderr on stdout */
+        if (dup2(dupfd, redirectedfd) < 0) {
+            /* error TODO */
+            return -1;
+        }
+    }
     return 0;
 }
 
-int set_out(int flags, const char * file) {
+int set_out(const char * file, ctx_t * ctx) {
     int open_flags = O_WRONLY | O_CREAT;
     int fd;
 
     if (file == NULL)
         return 0;
 
-    if ((flags & OUT_APPEND) != 0)
+    if ((ctx->flags & OUT_APPEND) != 0)
         open_flags |= O_APPEND;
     else
         open_flags |= O_TRUNC;
 
-    fd = open(file, open_flags);
+    if ((fd = open(file, open_flags)) < 0) {
+        /* error */
+        fprintf(stderr, "set_out(open), %s: %s\n", file, strerror(errno));
+        return -1;
+    }
 
+    /* only stdout is dupped to file. Enabling option -1, will include stderr */
+    /* FIXME : bug with option -2 */
     if (dup2(STDOUT_FILENO, fd) < 0) {
+        fprintf(stderr, "set_out(dup2): %s\n", strerror(errno));
         close(fd);
         return -1;
     }
@@ -255,11 +317,14 @@ int set_out(int flags, const char * file) {
     return fd;
 }
 
-int do_bench(int flags) {
-    if ((flags & (TIME | TIMEEXT)) != 0) {
-        pid_t pid = fork();
+int do_bench(ctx_t * ctx) {
+    if ((ctx->flags & (TIME | TIMEEXT)) != 0) {
+        pid_t wpid, pid = fork();
+        struct tms tms;
         clock_t t0 = clock();
-
+#if 0
+        struct timespec ts
+#endif
         if (pid < 0) {
             perror("fork");
             return ERR_BENCH;
@@ -270,23 +335,30 @@ int do_bench(int flags) {
             return 0;
         } else {
             struct rusage rusage;
+            FILE * out = ctx->alternatefile;
             int status;
 
             /* father */
-            wait4(pid, &status, 0 /*options*/, &rusage);
-            if ((flags & TIME) != 0) {
-                fprintf(stderr, "real %ld.%02d\nuser %ld.%02d\nsys %ld.%02d\n",
+            //wait4(pid, &status, 0 /*options*/, &rusage);
+            if ((wpid = waitpid(pid, &status, 0 /* options */)) <= 0)
+                perror("waitpid");
+            if (times(&tms) == (clock_t) -1)
+                perror("times");
+            if (getrusage(RUSAGE_CHILDREN, &rusage) < 0)
+                perror("getrusage");
+            if ((ctx->flags & TIME) != 0) {
+                fprintf(out, "real %ld.%02d\nuser %ld.%02d\nsys %ld.%02d\n",
                         0L, 0,
                         rusage.ru_utime.tv_sec, rusage.ru_utime.tv_usec / 10000,
                         rusage.ru_stime.tv_sec, rusage.ru_stime.tv_usec / 10000);
             }
-            if ((flags & TIMEEXT) != 0) {
-                fprintf(stderr, "ncvsw %ld\nnivcsw %ld\nisrss %ld\nidrss %ld\nixrss %ld\nmaxrss %ld\n"
-                                "msgsnd %ld\n, msgrcv %ld\n"
-                                "inblock %ld\n, outblock %ld\n"
-                                "first %ld\n"
-                                "minflt %ld\nmaxflt %ld\n"
-                                "nswps %ld\nnsigs %ld\n"
+            if ((ctx->flags & TIMEEXT) != 0) {
+                fprintf(out, "ncvsw %ld\nnivcsw %ld\nisrss %ld\nidrss %ld\nixrss %ld\nmaxrss %ld\n"
+                             "msgsnd %ld\nmsgrcv %ld\n"
+                             "inblock %ld\noutblock %ld\n"
+                             "first %ld\n"
+                             "minflt %ld\nmaxflt %ld\n"
+                             "nswps %ld\nnsigs %ld\n"
                         ,rusage.ru_nvcsw, rusage.ru_nivcsw,
                         rusage.ru_isrss, rusage.ru_idrss, rusage.ru_ixrss, rusage.ru_maxrss,
                         rusage.ru_msgsnd, rusage.ru_msgrcv,
@@ -297,32 +369,27 @@ int do_bench(int flags) {
                         rusage.ru_nsignals
                        );
             }
+            clean_ctx(0, ctx);
+            // TODO
+            if (WIFEXITED(status)) {
+                exit(WEXITSTATUS(status));
+            } else if (WIFSIGNALED(status)) {
+                exit(-100-WTERMSIG(status));
+            }
         }
     }
     return 0;
 }
 
 int main(int argc, char *const* argv) {
-    ctx_t           ctx = { .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .outfd = -1 };
-    char **         newargv;
+    ctx_t           ctx = { .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .alternatefile = NULL, .outfd = -1 };
+    char **         newargv = NULL;
     const char *    outfile = NULL;
     uid_t           uid = 0;
     gid_t           gid = 0;
-    int             flags = 0;
     int             i_argv;
-    int             i;
+    int             ret = 0;
 
-    fprintf(stderr, "%s v%s %s built on %s, %s from git:%s\n\n",
-#           ifdef HAVE_VERSION_H
-            BUILD_APPNAME, APP_VERSION, BUILD_APPRELEASE, __DATE__, __TIME__, BUILD_GITREV
-#           else
-            "vrunas", "?", __DATE__, __TIME__, "?"
-#           endif
-            );
-    fprintf(stderr, "Copyright (C) 2018 Vincent Sallaberry.\n"
-            "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n" \
-            "This is free software: you are free to change and redistribute it.\n" \
-            "There is NO WARRANTY, to the extent permitted by law.\n\n");
     for (i_argv = 1; i_argv < argc; i_argv++) {
         if (*argv[i_argv] == '-') {
             for (const char * arg = argv[i_argv] + 1; *arg; arg++) {
@@ -330,17 +397,17 @@ int main(int argc, char *const* argv) {
                     char *  endptr = NULL;
                     uid_t   tmpuid;
                     gid_t   tmpgid;
-                    case 't': flags |= TIME;        break ;
-                    case 'T': flags |= TIMEEXT;     break ;
+                    case 't': ctx.flags |= TIME;        break ;
+                    case 'T': ctx.flags |= TIMEEXT;     break ;
                     case '1':
-                        if ((flags & TO_STDERR) != 0)
+                        if ((ctx.flags & TO_STDERR) != 0)
                             fprintf(stderr, "warning, overiding previous '-2' with option '-1'\n");
-                        flags = (flags & ~TO_STDERR) | TO_STDOUT;
+                        ctx.flags = (ctx.flags & ~TO_STDERR) | TO_STDOUT;
                         break ;
                     case '2':
-                        if ((flags & TO_STDOUT) != 0)
+                        if ((ctx.flags & TO_STDOUT) != 0)
                             fprintf(stderr, "warning, overiding previous '-1' option with '-2'\n");
-                        flags = (flags & ~TO_STDOUT) | TO_STDERR;
+                        ctx.flags = (ctx.flags & ~TO_STDOUT) | TO_STDERR;
                         break ;
                     case 'o':
                     case 'O':
@@ -348,24 +415,24 @@ int main(int argc, char *const* argv) {
                             return usage(ERR_OPTION+9, &ctx);
                         if (outfile != NULL)
                             fprintf(stderr, "warning, overrinding previous '-%c %s' with '-%c %s'\n",
-                                    (flags & OUT_APPEND) != 0 ? 'O' : 'o', outfile, *arg, argv[i_argv]);
+                                    (ctx.flags & OUT_APPEND) != 0 ? 'O' : 'o', outfile, *arg, argv[i_argv]);
                         if (*arg == 'O')
-                            flags = OUT_APPEND;
+                            ctx.flags |= OUT_APPEND;
                         else
-                            flags &= ~OUT_APPEND;
+                            ctx.flags &= ~OUT_APPEND;
                         outfile = argv[i_argv];
                         break ;
                     case 'u':
                         if (++i_argv >= argc || arg[1])
                             return usage(ERR_OPTION+8, &ctx);
-                        if ((flags & HAVE_UID) != 0)
+                        if ((ctx.flags & HAVE_UID) != 0)
                             fprintf(stderr, "warning, overriding previous `-u` parameter with new value `%s`\n", argv[i_argv]);
                         errno = 0;
                         tmpuid = strtol(argv[i_argv], &endptr, 0);
                         if ((errno != 0 || !endptr || *endptr != 0)
                         && pwnam2id_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
                             return clean_ctx(ERR_OPTION+7, &ctx);
-                        flags |= HAVE_UID;
+                        ctx.flags |= HAVE_UID;
                         uid = tmpuid;
                         break ;
                     case 'U':
@@ -373,20 +440,20 @@ int main(int argc, char *const* argv) {
                             return usage(ERR_OPTION+6, &ctx);
                         if (pwnam2id_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
                             return clean_ctx(ERR_OPTION+5, &ctx);
-                        flags |= OPTIONAL_ARGS;
+                        ctx.flags |= OPTIONAL_ARGS;
                         fprintf(stdout, "%lu\n", (unsigned long) tmpuid);
                         break ;
                     case 'g':
                         if (++i_argv >= argc || arg[1])
                             return usage(ERR_OPTION+4, &ctx);
-                        if ((flags & HAVE_GID) != 0)
+                        if ((ctx.flags & HAVE_GID) != 0)
                             fprintf(stderr, "warning, overriding previous `-g` parameter with new value `%s`\n", argv[i_argv]);
                         errno = 0;
                         tmpgid = strtol(argv[i_argv], &endptr, 0);
                         if ((errno != 0 || !endptr || *endptr != 0)
                         && grnam2id_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
                             return clean_ctx(ERR_OPTION+3, &ctx);
-                        flags |= HAVE_GID;
+                        ctx.flags |= HAVE_GID;
                         gid = tmpgid;
                         break ;
                     case 'G':
@@ -394,7 +461,7 @@ int main(int argc, char *const* argv) {
                             return usage(ERR_OPTION+2, &ctx);
                         if (grnam2id_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
                             return clean_ctx(ERR_OPTION+1, &ctx);
-                        flags |= OPTIONAL_ARGS;
+                        ctx.flags |= OPTIONAL_ARGS;
                         fprintf(stdout, "%lu\n", (unsigned long) tmpgid);
                         break ;
 #                   ifdef APP_INCLUDE_SOURCE
@@ -412,35 +479,45 @@ int main(int argc, char *const* argv) {
             }
         } else break ;
     }
-    /* free resources */
-    clean_ctx(0, &ctx);
-    /* error if program is mandatory */
-    if (i_argv >= argc) {
-        if ((flags & OPTIONAL_ARGS) != 0)
-           return 0;
-        fprintf(stderr, "error: missing program\n");
-        return usage(ERR_PROG_MISSING, &ctx);
+    /* clean now unnecessary resources */
+    if (ctx.buf) {
+        free(ctx.buf);
+        ctx.buf = NULL;
     }
-    /* prepare uid, gid, newargv, dups, outfile, bench for excvp */
-    if ((i = set_uidgid(flags, uid, gid)) != 0)
-        return ERR_SETID;
-   if ((i = set_dups(flags)) != 0)
-        return ERR_REDIR;
-    if ((i = set_out(flags, outfile)) != 0)
-        return ERR_SETOUT;
-    if ((newargv = build_argv(argc - i_argv, argv + i_argv)) == NULL)
-        return ERR_BUILDARGV;
-    if ((i = do_bench(flags)) != 0) {
+    do {
+        /* first of all, set up file redirections */
+        if (set_redirections(&ctx) != 0 && (ret = ERR_REDIR))
+            break ;
+        /* error if program is mandatory */
+        if (i_argv >= argc) {
+            if ((ctx.flags & OPTIONAL_ARGS) != 0 && ((ret = 0) || 1))
+                break ;
+            fprintf(stderr, "error: missing program\n");
+            ret = usage(ERR_PROG_MISSING, &ctx);
+            break ;
+        }
+        /* program header */
+        header(stdout);
+        /* prepare uid, gid, newargv, outfile, bench for excvp */
+        if (set_uidgid(uid, gid, &ctx) != 0 && (ret = ERR_SETID))
+            break ;
+        if (set_out(outfile, &ctx) != 0 && (ret = ERR_SETOUT))
+            break ;
+        if (do_bench(&ctx) != 0 && (ret = ERR_BENCH))
+            break ;
+        if ((newargv = build_argv(argc - i_argv, argv + i_argv, &ctx)) == NULL && (ret = ERR_BUILDARGV))
+            break ;
+        /* execvp, in, if needed, a forked process */
+        if (execvp(*newargv, newargv) < 0) {
+            ret = ERR_EXEC;
+            fprintf(stderr, "`%s` (", *newargv); perror("execvp)");
+            break ;
+        }
+        /* not reachable */
+        return ERR_NOT_REACHABLE;
+    } while (0);
+    if (newargv)
         free(newargv);
-        return ERR_BENCH;
-    }
-    /* execvp, in, if needed, a forked process */
-    if (execvp(*newargv, newargv) < 0) {
-        free(newargv);
-        fprintf(stderr, "`%s` (", *newargv); perror("execvp)");
-        return ERR_EXEC;
-    }
-    /* not reachable */
-    return ERR_NOT_REACHABLE;
+    return clean_ctx(ret, &ctx);
 }
 
