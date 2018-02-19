@@ -127,6 +127,7 @@ static int usage(int ret, ctx_t * ctx) {
             "  -1|-2        : redirect program stderr or stdout to respectively stdout(-1) or stderr(-2)\n"
             "  -t|-T        : print timings of program (-t:'time -p' posix format, -T:extended)\n"
             "                 with -1, timings will be printed to err, with -2, to out, otherwise, to err.\n"
+            "                 To put timings in variable and display command: '$ t=`vrunas -2 -t ls -R /`'\n"
             "  -o|-O file   : redirect program out to file (-O:append).\n"
             "                 With -1 or -2, program err and out are redirected to file.\n"
 #           ifdef _TEST
