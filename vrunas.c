@@ -46,6 +46,7 @@ enum FLAGS {
     OUT_APPEND      = 1 << 5,
     TIME            = 1 << 6,
     TIMEEXT         = 1 << 7,
+    WARN_MOREREDIRS = 1 << 8,
 };
 
 enum {
@@ -254,6 +255,12 @@ int set_redirections(ctx_t * ctx) {
     int backupfd;
     int dupfd;
     int redirectedfd = -1;
+    int ret = 0;
+
+    /* This method sets up stdout/stderr redirections so that the -1,-2 options
+     * are taken into account, AND, so that in case the '-t/-T' options are given,
+     * timings are the only things displayed on a given output (stderr|stdout).
+     * Therefore, in this method we have to take care when displaying anything */
 
     /* If bench is ON, we want it alone on its output so as it is easy for shell
      * scripts to catch (ctx->alternate file) */
@@ -272,20 +279,18 @@ int set_redirections(ctx_t * ctx) {
     if (redirectedfd >= 0) {
         /* make a backup of stderr */
         if ((backupfd = dup(redirectedfd)) < 0) {
-            /* error TODO */
-            return -1;
-        }
-        if ((ctx->alternatefile = fdopen(backupfd, "w")) == NULL) {
-            /* error TODO */
-            return -1;
+            ret = -1;
         }
         /* redirect stderr on stdout */
-        if (dup2(dupfd, redirectedfd) < 0) {
-            /* error TODO */
-            return -1;
+        else if (dup2(dupfd, redirectedfd) < 0) {
+            ret = -2;
+        }
+        /* make a FILE * of backupfd */
+        else if ((ctx->alternatefile = fdopen(backupfd, "w")) == NULL) {
+            ret = -3;
         }
     }
-    return 0;
+    return ret;
 }
 
 int set_out(const char * file, ctx_t * ctx) {
@@ -390,6 +395,42 @@ int main(int argc, char *const* argv) {
     int             i_argv;
     int             ret = 0;
 
+    /* first pass on command line to set redirections: nothing has to be written
+     * on stdout/stderr until set_redirections() is called */
+    for (i_argv = 1; i_argv < argc; i_argv++) {
+        if (*argv[i_argv] == '-') {
+            for (const char * arg = argv[i_argv] + 1; *arg; arg++) {
+                switch (*arg) {
+                    case 't': ctx.flags |= TIME;        break ;
+                    case 'T': ctx.flags |= TIMEEXT;     break ;
+                    case '1':
+                        if ((ctx.flags & TO_STDERR) != 0)
+                            ctx.flags |= WARN_MOREREDIRS;
+                        ctx.flags = (ctx.flags & ~TO_STDERR) | TO_STDOUT;
+                        break ;
+                    case '2':
+                        if ((ctx.flags & TO_STDOUT) != 0)
+                            ctx.flags |= WARN_MOREREDIRS;
+                        ctx.flags = (ctx.flags & ~TO_STDOUT) | TO_STDERR;
+                        break ;
+                }
+            }
+        }
+    }
+    /* setup of setout/stderr redirections so that we can use them blindly */
+    if (set_redirections(&ctx) != 0) {
+        /* see comment inside set_redirections() method. Safest thing is to not display anything
+         * on error. Error here is rare, but... TODO */
+        fprintf((ctx.flags & (TIME | TIMEEXT)) == 0 ? stderr
+                     : (ctx.flags & TO_STDERR) != 0 ? stdout : stderr,
+                "set_redirections(dup|dup2|open): %s\n", strerror(errno));
+        exit(clean_ctx(ERR_REDIR, &ctx));
+    }
+    if ((ctx.flags & WARN_MOREREDIRS) != 0) {
+        fprintf(stderr, "warning, conflicting '-1' and '-2' options, taking the last one: '%s'\n",
+                (ctx.flags & TO_STDERR) != 0 ? "-2" : "-1");
+    }
+    /* second pass on command line */
     for (i_argv = 1; i_argv < argc; i_argv++) {
         if (*argv[i_argv] == '-') {
             for (const char * arg = argv[i_argv] + 1; *arg; arg++) {
@@ -397,24 +438,17 @@ int main(int argc, char *const* argv) {
                     char *  endptr = NULL;
                     uid_t   tmpuid;
                     gid_t   tmpgid;
-                    case 't': ctx.flags |= TIME;        break ;
-                    case 'T': ctx.flags |= TIMEEXT;     break ;
                     case '1':
-                        if ((ctx.flags & TO_STDERR) != 0)
-                            fprintf(stderr, "warning, overiding previous '-2' with option '-1'\n");
-                        ctx.flags = (ctx.flags & ~TO_STDERR) | TO_STDOUT;
-                        break ;
                     case '2':
-                        if ((ctx.flags & TO_STDOUT) != 0)
-                            fprintf(stderr, "warning, overiding previous '-1' option with '-2'\n");
-                        ctx.flags = (ctx.flags & ~TO_STDOUT) | TO_STDERR;
+                    case 't':
+                    case 'T':
                         break ;
                     case 'o':
                     case 'O':
                         if (++i_argv >= argc || arg[1])
                             return usage(ERR_OPTION+9, &ctx);
                         if (outfile != NULL)
-                            fprintf(stderr, "warning, overrinding previous '-%c %s' with '-%c %s'\n",
+                            fprintf(stderr, "warning, overriding previous '-%c %s' with '-%c %s'\n",
                                     (ctx.flags & OUT_APPEND) != 0 ? 'O' : 'o', outfile, *arg, argv[i_argv]);
                         if (*arg == 'O')
                             ctx.flags |= OUT_APPEND;
@@ -474,7 +508,9 @@ int main(int argc, char *const* argv) {
                     case 'd': break ;
 #                   endif
                     case 'h': return usage(0, &ctx);
-                    default:  return usage(ERR_OPTION, &ctx);
+                    default:
+                        fprintf(stderr, "unkown option '-%c'\n", *arg);
+                        return usage(ERR_OPTION, &ctx);
                 }
             }
         } else break ;
@@ -485,9 +521,6 @@ int main(int argc, char *const* argv) {
         ctx.buf = NULL;
     }
     do {
-        /* first of all, set up file redirections */
-        if (set_redirections(&ctx) != 0 && (ret = ERR_REDIR))
-            break ;
         /* error if program is mandatory */
         if (i_argv >= argc) {
             if ((ctx.flags & OPTIONAL_ARGS) != 0 && ((ret = 0) || 1))
