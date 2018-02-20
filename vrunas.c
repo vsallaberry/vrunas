@@ -660,7 +660,12 @@ int main(int argc, char *const* argv) {
         }
         /* program header */
         header(stdout);
-        /* prepare uid, gid, newargv, outfile, bench for excvp */
+        /* prepare priority, uid, gid, newargv, outfile, bench for excvp */
+        if ((ctx.flags & HAVE_PRIORITY) != 0 && setpriority(PRIO_PROCESS, getpid(), priority) < 0) {
+            ret = ERR_PRIORITY;
+            fprintf(stderr, "setpriority(%d): %s\n", priority, strerror(errno));
+            break ;
+        }
         if ((ctx.flags & FILE_NEWIDENTITY) != 0 && set_uidgid(uid, gid, &ctx) != 0 && ((ret = ERR_SETID) || 1))
             break ;
         if ((ctx.outfd = set_out(outfile, &ctx)) < 0 && ((ret = ERR_SETOUT) || 1))
@@ -673,11 +678,6 @@ int main(int argc, char *const* argv) {
             break ;
         if ((newargv = build_argv(argc - i_argv, argv + i_argv, &ctx)) == NULL && ((ret = ERR_BUILDARGV) || 1))
             break ;
-        if ((ctx.flags & HAVE_PRIORITY) != 0 && setpriority(PRIO_PROCESS, getpid(), priority) < 0) {
-            ret = ERR_PRIORITY;
-            fprintf(stderr, "setpriority(%d): %s\n", priority, strerror(errno));
-            break ;
-        }
         /* execvp, in, if needed, a forked process */
         if (execvp(*newargv, newargv) < 0) {
             ret = ERR_EXEC;
