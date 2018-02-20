@@ -22,8 +22,8 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/time.h>
-#include <sys/times.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sched.h>
 #include <signal.h>
 #include <unistd.h>
@@ -373,25 +373,66 @@ static void sig_handler(int sig) {
     kill(pid, sig);
 }
 
+
+#if defined(__APPLE__) && !defined(CLOCK_MONOTONIC)
+# include <mach/mach.h>
+# include <mach/clock.h>
+# define CLOCK_MONOTONIC 0
+int wrap_clock_gettime(int id, struct timespec * ts) {
+    static int              init_done = 0;
+    static host_t           host;
+    static clock_serv_t     clock_serv;
+    mach_timespec_t         mts;
+    (void)id;
+
+    if (!init_done) {
+        /* i don't think it is thread safe but i don't need it */
+        host = mach_host_self();
+        if (host_get_clock_service(host, REALTIME_CLOCK, &clock_serv) != KERN_SUCCESS) {
+            fprintf(stderr, "wrap_clock_gettime(): mach host_get_clock_service() error\n");
+            errno = EINVAL;
+            return -1;
+        }
+        init_done = 1;
+    }
+
+    if (clock_get_time(clock_serv, &mts) != KERN_SUCCESS) {
+        fprintf(stderr, "wrap_clock_gettime(): mack clock_get_time() error\n");
+        errno = EINVAL;
+        return -1;
+    }
+    ts->tv_sec = mts.tv_sec;
+    ts->tv_nsec = mts.tv_nsec;
+    return 0;
+}
+/*kern_return_t host_get_clock_service(host_t host, clock_id_t clock_id / * REALTIME_CLOCK * /, clock_serv_t *clock_serv);
+kern_return_t clock_get_time(clock_serv_t clock_serv,mach_timespec_t *cur_ time //tv_nsec, tv_sec);*/
+#elif !defined(CLOCK_MONOTONIC)
+# define CLOCK_MONOTONIC 0
+# pragma message "warning, CLOCK_MONOTONIC (and maybe clock_gettime()) is not defined, using gettimeofday."
+int wrap_clock_gettime(int id, struct timespec * ts) {
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) < 0) {
+        fprintf(stderr, "wrap_clock_gettime(gettimeofday): %s\n", strerror(errno));
+        return -1;
+    }
+    ts->tv_sec = tv.tv_sec;
+    ts->tv_nsec = tv.tv_usec * 1000;
+    return 0;
+}
+#else
+# define wrap_clock_gettime clock_gettime
+#endif
+
 static int do_bench(ctx_t * ctx) {
     if ((ctx->flags & (TIME_POSIX | TIME_EXT)) != 0) {
-        pid_t       wpid, pid;
-        struct tms  tms;
-        clock_t     t0;
-        long        clk_tck;
+        pid_t           wpid, pid;
+        struct timespec ts0;
 
-        if ((clk_tck = sysconf(_SC_CLK_TCK)) < 0) {
-#           ifdef CLK_TCK
-            clk_tck = CLK_TCK;
-#           else
-#           pragma message "warning, CLK_TCK is not defined, assuming it is 100"
-            clk_tck = 100;
-#           endif
+        if (wrap_clock_gettime(CLOCK_MONOTONIC, &ts0) < 0) {
+            fprintf(stderr, "bench: clock_gettime#1 error: %s\n", strerror(errno));
+            memset(&ts0, 0, sizeof(ts0));
         }
-#if 0
-        struct timespec ts
-#endif
-        t0 = times(&tms);
         if ((pid = fork()) < 0) {
             perror("fork");
             return ERR_BENCH;
@@ -401,10 +442,11 @@ static int do_bench(ctx_t * ctx) {
             return 0;
         } else {
             /* father */
-            struct  rusage rusage;
-            FILE *  out = ctx->alternatefile;
-            int     status;
-            clock_t times_val;
+            struct          rusage rusage;
+            FILE *          out = ctx->alternatefile;
+            int             status;
+            struct timeval  tv0, tv1;
+            struct timespec ts1;
             int     sigs[] = { SIGINT, SIGHUP, SIGTERM, SIGQUIT, SIGUSR1, SIGUSR1, SIGPIPE };
             struct sigaction sa = { .sa_handler = sig_handler, .sa_flags = SA_RESTART };
 
@@ -419,20 +461,33 @@ static int do_bench(ctx_t * ctx) {
             /* wait for termination of program */
             if ((wpid = waitpid(pid, &status, 0 /* options */)) <= 0)
                 perror("waitpid");
-            if ((times_val = times(&tms)) == (clock_t) -1)
-                perror("times");
+
+            /* get timings and other stats */
+            if (wrap_clock_gettime(CLOCK_MONOTONIC, &ts1) < 0) {
+                fprintf(stderr, "bench: clock_gettime#2 error: %s\n", strerror(errno));
+                memset(&ts1, 0, sizeof(ts1));
+            }
+            tv0.tv_sec = ts0.tv_sec;
+            tv0.tv_usec = ts0.tv_nsec / 1000;
+            tv1.tv_sec = ts1.tv_sec;
+            tv1.tv_usec = ts1.tv_nsec / 1000;
+            timersub(&tv1, &tv0, &tv1);
+
             if (getrusage(RUSAGE_CHILDREN, &rusage) < 0)
                 perror("getrusage");
+
             if ((ctx->flags & TIME_POSIX) != 0) {
-                fprintf(out, "real %lu.%02lu\nuser %ld.%02d\nsys %ld.%02d\n",
-                        (times_val - t0) / clk_tck, (((times_val - t0) * 100) / clk_tck) % 100,
-                        rusage.ru_utime.tv_sec, rusage.ru_utime.tv_usec / 10000,
-                        rusage.ru_stime.tv_sec, rusage.ru_stime.tv_usec / 10000);
+                fprintf(out, "real %ld.%02d\nuser %ld.%02d\nsys %ld.%02d\n",
+                        (long)tv1.tv_sec, (int)(tv1.tv_usec / 10000),
+                        (long)rusage.ru_utime.tv_sec, (int)(rusage.ru_utime.tv_usec / 10000),
+                        (long)rusage.ru_stime.tv_sec, (int)(rusage.ru_stime.tv_usec / 10000));
             }
+
             if ((ctx->flags & TIME_EXT) != 0) {
                 /* ru_utime     the total amount of time spent executing in user mode.
                    ru_stime     the total amount of time spent in the system executing on behalf of the process(es). */
-                fprintf(out, "maxrss   % 10ld (the maximum resident set size utilized (in bytes).)\n"
+                fprintf(out, "realtime % 3ld.%06d (the real time in seconds spent by process with usec precision)\n"
+                             "maxrss   % 10ld (the maximum resident set size utilized (in bytes).)\n"
                              "ixrss    % 10ld (an integral value indicating the amount of memory used "
                                               "by the text segment that was also shared among other "
                                               "processes. This value is expressed in units of "
@@ -459,6 +514,7 @@ static int do_bench(ctx_t * ctx) {
                              "nivcsw   % 10ld (the number of times a context switch resulted due to a higher "
                                               "priority process becoming runnable or because the current "
                                               "process exceeded its time slice.)\n",
+                        (long) tv1.tv_sec, (int) tv1.tv_usec,
                         rusage.ru_maxrss, rusage.ru_ixrss, rusage.ru_idrss, rusage.ru_isrss,
                         rusage.ru_minflt, rusage.ru_majflt,
                         rusage.ru_nswap,
@@ -549,7 +605,7 @@ int main(int argc, char *const* argv) {
                 case '2':
                 case 't':
                 case 'T':
-                    break ;
+                    break ; /* treated in the first pass */
                 case 'p':
                     if (++i_argv >= argc || arg[1])
                         return usage(ERR_OPTION+12, &ctx);
