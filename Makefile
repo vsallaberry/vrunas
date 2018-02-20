@@ -126,6 +126,7 @@ TEST_RUN_PROGRAM = tmp=`mktemp ./tmp_test.XXXXXX`; $(TEST) -z "$$tmp" && tmp=./t
 		   && ./$(BIN) -t -1 ls / | if $(GREP) -Eq '^(real|user|sys) '; then false; else true; fi \
 		   && { ./$(BIN) -o "$$tmp" ls -d /_1NotFOOund / ; ! $(GREP) -Eq '_1NotFOOund' "$$tmp" && $(GREP) -Eq '^/$$' "$$tmp"; } \
 		   && { ./$(BIN) -o pff -1 -O "$$tmp" ls -d /_2NotFOOund ; $(GREP) -Eq '/_2NotFOOund' "$$tmp" && $(GREP) -Eq '^/$$' "$$tmp"; } \
+		   && ./$(BIN) -i Makefile $(GREP) Vincent \
 		   && ret=true; $(RM) "$$tmp"; $$ret
 
 ############################################################################################

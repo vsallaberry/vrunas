@@ -50,6 +50,7 @@ enum FLAGS {
     TIME_POSIX      = 1 << 6,
     TIME_EXT        = 1 << 7,
     WARN_MOREREDIRS = 1 << 8,
+    FILE_NEWIDENTITY= 1 << 9,
 };
 
 enum {
@@ -61,6 +62,7 @@ enum {
     ERR_REDIR           = 6,
     ERR_SETOUT          = 7,
     ERR_BENCH           = 8,
+    ERR_SETIN           = 9,
     ERR_OPTION          = 10,
     ERR                 = -1,
     ERR_NOT_REACHABLE   = -128,
@@ -74,6 +76,7 @@ typedef struct {
     size_t              bufsz;
     FILE *              alternatefile;  /* file not used for application output, can be used to display bench */
     int                 outfd;          /* fd of file receving program output, -1 if stdout or stderr */
+    int                 infd;           /* fd of file replacing program input, -1 if stdin */
 } ctx_t;
 
 static int clean_ctx(int ret, ctx_t * ctx) {
@@ -90,6 +93,10 @@ static int clean_ctx(int ret, ctx_t * ctx) {
             close(ctx->outfd);
             ctx->outfd = -1;
         }
+        if (ctx->infd >= 0) {
+            close(ctx->infd);
+            ctx->infd = -1;
+        }
     }
     return ret;
 }
@@ -103,16 +110,17 @@ static void header(FILE * out) {
 #           endif
             );
     fprintf(out, "Copyright (C) 2018 Vincent Sallaberry.\n"
-            "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n" \
-            "This is free software: you are free to change and redistribute it.\n" \
-            "There is NO WARRANTY, to the extent permitted by law.\n\n");
+                 "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n" \
+                 "This is free software: you are free to change and redistribute it.\n" \
+                 "There is NO WARRANTY, to the extent permitted by law.\n\n");
 }
 
 static int usage(int ret, ctx_t * ctx) {
     FILE * out = ret ? stderr : stdout;
 
     header(out);
-    fprintf(out, "Usage: %s [-h] [-u uid|user] [-g gid|group] [-U user] [-G group] [-t|-T] [-1|-2] [-o|-O file]"
+    fprintf(out, "Usage: %s [-h] [-u uid|user] [-g gid|group] [-U user] [-G group] [-t|-T]\n"
+                 "                [-1|-2] [-o|-O file] [-N] [-i file]"
 #                             ifdef APP_INCLUDE_SOURCE
                               " [-s]"
 #                             endif
@@ -127,12 +135,16 @@ static int usage(int ret, ctx_t * ctx) {
             "  -g gid|group : change gid\n"
             "  -U user      : print uid of user, no program arguments needed.\n"
             "  -G group     : print gid of group, no program arguments needed.\n"
-            "  -1|-2        : redirect program stderr or stdout to respectively stdout(-1) or stderr(-2)\n"
-            "  -t|-T        : print timings of program (-t:'time -p' posix format, -T:extended)\n"
-            "                 with -1, timings will be printed to err, with -2, to out, otherwise, to err.\n"
-            "                 To put timings in variable and display command: '$ t=`vrunas -2 -t ls -R /`'\n"
-            "  -o|-O file   : redirect program out to file (-O:append).\n"
-            "                 With -1 or -2, program err and out are redirected to file.\n"
+            "  -1|-2        : redirect program stderr or stdout to respectively stdout(-1)\n"
+            "                 or stderr(-2)\n"
+            "  -t|-T        : print timings of program (-t:'time -p' POSIX, -T:extended)\n"
+            "                 With -1: timings will be printed to stderr.\n"
+            "                 With -2: to stdout, otherwise, to stderr. To put timings in\n"
+            "                 variable and display command: '$ t=`vrunas -2 -t ls -R /`'\n"
+            "  -o|-O file   : redirect program stdout to file (-O:append).\n"
+            "                 With -1/-2, program stderr AND stdout are redirected to file.\n"
+            "  -N           : create/open in/out file with New identity, after uid/gid switch\n"
+            "  -i file      : program receives input from file instead of stdin.\n"
 #           ifdef _TEST
             /* nothing */
 #           endif
@@ -329,6 +341,24 @@ int set_out(const char * file, ctx_t * ctx) {
     return fd;
 }
 
+int set_in(const char * file, ctx_t * ctx) {
+    int fd;
+    (void) ctx;
+
+    if (file == NULL)
+        return 0;
+    if ((fd = open(file, O_RDONLY)) < 0) {
+        fprintf(stderr, "set_in(open): %s\n", strerror(errno));
+        return -1;
+    }
+    if (dup2(fd, STDIN_FILENO) < 0) {
+        fprintf(stderr, "set_in(dup2 stdin): %s\n", strerror(errno));
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
 /* signal handler for do_bench(), ignoring and forwarding signals to child */
 static void sig_handler(int sig) {
     static pid_t pid = 0;
@@ -452,6 +482,7 @@ int main(int argc, char *const* argv) {
     ctx_t           ctx = { .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .alternatefile = NULL, .outfd = -1 };
     char **         newargv = NULL;
     const char *    outfile = NULL;
+    const char *    infile = NULL;
     uid_t           uid = 0;
     gid_t           gid = 0;
     int             i_argv;
@@ -505,6 +536,15 @@ int main(int argc, char *const* argv) {
                     case 't':
                     case 'T':
                         break ;
+                    case 'i':
+                        if (++i_argv >= argc || arg[1])
+                            return usage(ERR_OPTION+10, &ctx);
+                        if (infile != NULL)
+                            fprintf(stderr, "warning, overriding previous '-%c %s' with '-%c %s'\n",
+                                    *arg, infile, *arg, argv[i_argv]);
+                        infile = argv[i_argv];
+                        break ;
+                    case 'N': ctx.flags |= FILE_NEWIDENTITY; break ;
                     case 'o':
                     case 'O':
                         if (++i_argv >= argc || arg[1])
@@ -594,13 +634,17 @@ int main(int argc, char *const* argv) {
         /* program header */
         header(stdout);
         /* prepare uid, gid, newargv, outfile, bench for excvp */
-        if (set_uidgid(uid, gid, &ctx) != 0 && (ret = ERR_SETID))
+        if ((ctx.flags & FILE_NEWIDENTITY) != 0 && set_uidgid(uid, gid, &ctx) != 0 && ((ret = ERR_SETID) || 1))
             break ;
-        if ((ctx.outfd = set_out(outfile, &ctx)) < 0 && (ret = ERR_SETOUT))
+        if ((ctx.outfd = set_out(outfile, &ctx)) < 0 && ((ret = ERR_SETOUT) || 1))
             break ;
-        if (do_bench(&ctx) != 0 && (ret = ERR_BENCH))
+        if ((ctx.infd = set_in(infile, &ctx)) < 0 && ((ret = ERR_SETIN) || 1))
             break ;
-        if ((newargv = build_argv(argc - i_argv, argv + i_argv, &ctx)) == NULL && (ret = ERR_BUILDARGV))
+        if ((ctx.flags & FILE_NEWIDENTITY) == 0 && set_uidgid(uid, gid, &ctx) != 0 && ((ret = ERR_SETID) || 1))
+            break ;
+        if (do_bench(&ctx) != 0 && ((ret = ERR_BENCH) || 1))
+            break ;
+        if ((newargv = build_argv(argc - i_argv, argv + i_argv, &ctx)) == NULL && ((ret = ERR_BUILDARGV) || 1))
             break ;
         /* execvp, in, if needed, a forked process */
         if (execvp(*newargv, newargv) < 0) {
