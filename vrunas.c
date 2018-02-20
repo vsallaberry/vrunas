@@ -53,17 +53,17 @@ enum FLAGS {
 };
 
 enum {
-    OK = 0,
-    ERR_PROG_MISSING = 1,
-    ERR_SETID = 2,
-    ERR_BUILDARGV = 4,
-    ERR_EXEC = 5,
-    ERR_REDIR = 6,
-    ERR_SETOUT = 7,
-    ERR_BENCH = 8,
-    ERR_OPTION = 10,
-    ERR = -1,
-    ERR_NOT_REACHABLE = -128,
+    OK                  = 0,
+    ERR_PROG_MISSING    = 1,
+    ERR_SETID           = 2,
+    ERR_BUILDARGV       = 4,
+    ERR_EXEC            = 5,
+    ERR_REDIR           = 6,
+    ERR_SETOUT          = 7,
+    ERR_BENCH           = 8,
+    ERR_OPTION          = 10,
+    ERR                 = -1,
+    ERR_NOT_REACHABLE   = -128,
 };
 
 typedef struct {
@@ -309,20 +309,23 @@ int set_out(const char * file, ctx_t * ctx) {
     else
         open_flags |= O_TRUNC;
 
-    if ((fd = open(file, open_flags)) < 0) {
+    if ((fd = open(file, open_flags, (S_IWUSR | S_IRUSR | S_IRGRP /* | S_IROTH */ ))) < 0) {
         /* error */
         fprintf(stderr, "set_out(open), %s: %s\n", file, strerror(errno));
         return -1;
     }
 
-    /* only stdout is dupped to file. Enabling option -1, will include stderr */
-    /* FIXME : bug with option -2 */
-    if (dup2(STDOUT_FILENO, fd) < 0) {
-        fprintf(stderr, "set_out(dup2): %s\n", strerror(errno));
+    /* redirect always stdout to file. redirect stderr if -1 or -2 is given */
+    if ((ctx->flags & (TO_STDERR | TO_STDOUT)) != 0 && dup2(fd, STDERR_FILENO) < 0) {
+        fprintf(stderr, "set_out(dup2 stderr): %s\n", strerror(errno));
         close(fd);
         return -1;
     }
-
+    if (dup2(fd, STDOUT_FILENO) < 0) {
+        fprintf(stdout, "set_out(dup2 stdout): %s\n", strerror(errno));
+        close(fd);
+        return -1;
+    }
     return fd;
 }
 
@@ -568,7 +571,7 @@ int main(int argc, char *const* argv) {
 #                   endif
                     case 'h': return usage(0, &ctx);
                     default:
-                        fprintf(stderr, "unkown option '-%c'\n", *arg);
+                        fprintf(stderr, "unknown option '-%c'\n", *arg);
                         return usage(ERR_OPTION, &ctx);
                 }
             }
@@ -593,7 +596,7 @@ int main(int argc, char *const* argv) {
         /* prepare uid, gid, newargv, outfile, bench for excvp */
         if (set_uidgid(uid, gid, &ctx) != 0 && (ret = ERR_SETID))
             break ;
-        if (set_out(outfile, &ctx) != 0 && (ret = ERR_SETOUT))
+        if ((ctx.outfd = set_out(outfile, &ctx)) < 0 && (ret = ERR_SETOUT))
             break ;
         if (do_bench(&ctx) != 0 && (ret = ERR_BENCH))
             break ;

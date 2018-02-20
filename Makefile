@@ -116,13 +116,17 @@ VALGRIND_RUN_PROGRAM = ./$(BIN) -U root -G wheel -U NotFOOOUUuunnD -G NotFOOOUUu
 # VALGRIND_MEM_IGNORE_PATTERN: awk regexp to ignore keyworks in LEAKS reports
 VALGRIND_MEM_IGNORE_PATTERN = __CFInitialize|_objc_init|objc_msgSend|_NSInitializePlatform
 # TEST_RUN_PROGRAM: what to run with 'make test' (eg: 'true', './test.sh $(BIN)', './$(BIN) --test'
-TEST_RUN_PROGRAM = ./$(BIN) -U root && ./$(BIN) -u `id -u` ls / && ./$(BIN) -u `whoami` ls / \
+TEST_RUN_PROGRAM = tmp=`mktemp ./tmp_test.XXXXXX`; $(TEST) -z "$$tmp" && tmp=./tmp_test; ret=false; \
+		   ./$(BIN) -U root && ./$(BIN) -u `id -u` ls / && ./$(BIN) -u `whoami` ls / \
 		   && ./$(BIN) -u `id -u` -g `id -g` ls / && ./$(BIN) -g `id -g -n` ls / \
 		   && ./$(BIN) -u `./$(BIN) -U $$(whoami)` -g `./$(BIN) -G $$(id -g -n)` ls / \
 		   && ./$(BIN) -u 0 -u `id -u` -g 0 -g `id -g` ls / \
 		   && ./$(BIN) -t -2 ls / | $(GREP) -Eq '^(real|user|sys) ' \
 		   && ./$(BIN) -t -2 ls / | if $(GREP) -Eqv '^(real|user|sys) '; then false; else true; fi \
-		   && ./$(BIN) -t -1 ls / | $(GREP) -Eqv '^(real|user|sys) '
+		   && ./$(BIN) -t -1 ls / | if $(GREP) -Eq '^(real|user|sys) '; then false; else true; fi \
+		   && { ./$(BIN) -o "$$tmp" ls -d /_1NotFOOund / ; ! $(GREP) -Eq '_1NotFOOund' "$$tmp" && $(GREP) -Eq '^/$$' "$$tmp"; } \
+		   && { ./$(BIN) -o pff -1 -O "$$tmp" ls -d /_2NotFOOund ; $(GREP) -Eq '/_2NotFOOund' "$$tmp" && $(GREP) -Eq '^/$$' "$$tmp"; } \
+		   && ret=true; $(RM) "$$tmp"; $$ret
 
 ############################################################################################
 # GENERIC PART - in most cases no need to change anything below until end of file
