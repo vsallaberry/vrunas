@@ -119,7 +119,10 @@ VALGRIND_MEM_IGNORE_PATTERN = __CFInitialize|_objc_init|objc_msgSend|_NSInitiali
 TEST_RUN_PROGRAM = ./$(BIN) -U root && ./$(BIN) -u `id -u` ls / && ./$(BIN) -u `whoami` ls / \
 		   && ./$(BIN) -u `id -u` -g `id -g` ls / && ./$(BIN) -g `id -g -n` ls / \
 		   && ./$(BIN) -u `./$(BIN) -U $$(whoami)` -g `./$(BIN) -G $$(id -g -n)` ls / \
-		   && ./$(BIN) -u 0 -u `id -u` -g 0 -g `id -g` ls /
+		   && ./$(BIN) -u 0 -u `id -u` -g 0 -g `id -g` ls / \
+		   && ./$(BIN) -t -2 ls / | $(GREP) -Eq '^(real|user|sys) ' \
+		   && ./$(BIN) -t -2 ls / | if $(GREP) -Eqv '^(real|user|sys) '; then false; else true; fi \
+		   && ./$(BIN) -t -1 ls / | $(GREP) -Eqv '^(real|user|sys) '
 
 ############################################################################################
 # GENERIC PART - in most cases no need to change anything below until end of file

@@ -21,7 +21,10 @@
  */
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/time.h>
 #include <sys/times.h>
+#include <sched.h>
+#include <signal.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <time.h>
@@ -44,8 +47,8 @@ enum FLAGS {
     TO_STDOUT       = 1 << 3,
     TO_STDERR       = 1 << 4,
     OUT_APPEND      = 1 << 5,
-    TIME            = 1 << 6,
-    TIMEEXT         = 1 << 7,
+    TIME_POSIX      = 1 << 6,
+    TIME_EXT        = 1 << 7,
     WARN_MOREREDIRS = 1 << 8,
 };
 
@@ -253,18 +256,18 @@ char ** build_argv(int argc, char * const * argv, ctx_t * ctx) {
 }
 
 int set_redirections(ctx_t * ctx) {
-    int backupfd;
-    int dupfd;
-    int redirectedfd = -1;
-    int ret = 0;
+    int     backupfd;
+    int     dupfd;
+    int     redirectedfd = -1;
+    int     ret = 0;
 
     /* This method sets up stdout/stderr redirections so that the -1,-2 options
      * are taken into account, AND, so that in case the '-t/-T' options are given,
-     * timings are the only things displayed on a given output (stderr|stdout).
-     * Therefore, in this method we have to take care when displaying anything */
+     * timings are the only things displayed on a given output (stderr|stdout) to
+     * make it easy to catch in shell scripts.
+     * Therefore, in this method we have to take care when displaying anything,
+     * because redirections are not set up yet */
 
-    /* If bench is ON, we want it alone on its output so as it is easy for shell
-     * scripts to catch (ctx->alternate file) */
     /* With '-2', stdout is redirected to stderr. If bench is ON,
      * it is displayed on the real stdout (ctx->alternatefile) */
     if ((ctx->flags & TO_STDERR) != 0) {
@@ -273,16 +276,16 @@ int set_redirections(ctx_t * ctx) {
     }
     /* Else, with '-1' or if bench is ON, stderr is redirected to stdout, and
      * bench is displayed on the real stderr (ctx->alternatefile) */
-    else if ((ctx->flags & TO_STDOUT) != 0  || (ctx->flags & (TIME | TIMEEXT)) != 0) {
+    else if ((ctx->flags & TO_STDOUT) != 0  || (ctx->flags & (TIME_POSIX | TIME_EXT)) != 0) {
         dupfd = STDOUT_FILENO;
         redirectedfd = STDERR_FILENO;
     }
     if (redirectedfd >= 0) {
-        /* make a backup of stderr */
+        /* make a backup of redirected fd */
         if ((backupfd = dup(redirectedfd)) < 0) {
             ret = -1;
         }
-        /* redirect stderr on stdout */
+        /* redirect redirected fd on dupfdt */
         else if (dup2(dupfd, redirectedfd) < 0) {
             ret = -2;
         }
@@ -323,64 +326,119 @@ int set_out(const char * file, ctx_t * ctx) {
     return fd;
 }
 
-int do_bench(ctx_t * ctx) {
-    if ((ctx->flags & (TIME | TIMEEXT)) != 0) {
-        pid_t wpid, pid = fork();
-        struct tms tms;
-        clock_t t0 = clock();
+/* signal handler for do_bench(), ignoring and forwarding signals to child */
+static void sig_handler(int sig) {
+    static pid_t pid = 0;
+    if (pid == 0) {
+        pid = (pid_t) sig;
+        return ;
+    }
+    kill(pid, sig);
+}
+
+static int do_bench(ctx_t * ctx) {
+    if ((ctx->flags & (TIME_POSIX | TIME_EXT)) != 0) {
+        pid_t       wpid, pid;
+        struct tms  tms;
+        clock_t     t0;
+        long        clk_tck;
+
+        if ((clk_tck = sysconf(_SC_CLK_TCK)) < 0) {
+#           ifdef CLK_TCK
+            clk_tck = CLK_TCK;
+#           else
+#           pragma message "warning, CLK_TCK is not defined, assuming it is 100"
+            clk_tck = 100;
+#           endif
+        }
 #if 0
         struct timespec ts
 #endif
-        if (pid < 0) {
+        t0 = times(&tms);
+        if ((pid = fork()) < 0) {
             perror("fork");
             return ERR_BENCH;
-        }
-        if (pid == 0) {
-            /* son */
-            //yield();
+        } else if (pid == 0) {
+            /* son : give to hand to father, and continue execution */
+            sched_yield();
             return 0;
         } else {
-            struct rusage rusage;
-            FILE * out = ctx->alternatefile;
-            int status;
-
             /* father */
-            //wait4(pid, &status, 0 /*options*/, &rusage);
+            struct  rusage rusage;
+            FILE *  out = ctx->alternatefile;
+            int     status;
+            clock_t times_val;
+            int     sigs[] = { SIGINT, SIGHUP, SIGTERM, SIGQUIT, SIGUSR1, SIGUSR1, SIGPIPE };
+            struct sigaction sa = { .sa_handler = sig_handler, .sa_flags = SA_RESTART };
+
+            /* install signal handler and give to him the program pid */
+            sig_handler(pid);
+            sigemptyset(&sa.sa_mask);
+            for (unsigned int i = 0; i < sizeof(sigs) / sizeof(*sigs); i++) {
+                if (sigaction(sigs[i], &sa, NULL) < 0)
+                    fprintf(stderr, "bench sigaction(%s): %s\n", strsignal(sigs[i]), strerror(errno));
+            }
+
+            /* wait for termination of program */
             if ((wpid = waitpid(pid, &status, 0 /* options */)) <= 0)
                 perror("waitpid");
-            if (times(&tms) == (clock_t) -1)
+            if ((times_val = times(&tms)) == (clock_t) -1)
                 perror("times");
             if (getrusage(RUSAGE_CHILDREN, &rusage) < 0)
                 perror("getrusage");
-            if ((ctx->flags & TIME) != 0) {
-                fprintf(out, "real %ld.%02d\nuser %ld.%02d\nsys %ld.%02d\n",
-                        0L, 0,
+            if ((ctx->flags & TIME_POSIX) != 0) {
+                fprintf(out, "real %lu.%02lu\nuser %ld.%02d\nsys %ld.%02d\n",
+                        (times_val - t0) / clk_tck, (((times_val - t0) * 100) / clk_tck) % 100,
                         rusage.ru_utime.tv_sec, rusage.ru_utime.tv_usec / 10000,
                         rusage.ru_stime.tv_sec, rusage.ru_stime.tv_usec / 10000);
             }
-            if ((ctx->flags & TIMEEXT) != 0) {
-                fprintf(out, "ncvsw %ld\nnivcsw %ld\nisrss %ld\nidrss %ld\nixrss %ld\nmaxrss %ld\n"
+            if ((ctx->flags & TIME_EXT) != 0) {
+                /*
+                ru_utime     the total amount of time spent executing in user mode.
+                ru_stime     the total amount of time spent in the system executing on behalf of the process(es).
+                ru_maxrss    the maximum resident set size utilized (in bytes).
+                ru_ixrss     an integral value indicating the amount of memory used by the text segment that was also shared among other processes.
+                             This value is expressed in units of kilobytes * ticks-of-execution.
+                ru_idrss     an integral value of the amount of unshared memory residing in the data segment of a process (expressed in units of kilobytes * ticks-of-execution).
+                ru_isrss     an integral value of the amount of unshared memory residing in the stack segment of a process (expressed in units of kilobytes * ticks-of-execution).
+                ru_minflt    the number of page faults serviced without any I/O activity; here I/O activity is avoided by reclaiming a page frame from the list of pages awaiting reallocation.
+                ru_majflt    the number of page faults serviced that required I/O activity.
+                ru_nswap     the number of times a process was swapped out of main memory.
+                ru_inblock   the number of times the file system had to perform input.
+                ru_oublock   the number of times the file system had to perform output.
+                ru_msgsnd    the number of IPC messages sent.
+                ru_msgrcv    the number of IPC messages received.
+                ru_nsignals  the number of signals delivered.
+                ru_nvcsw     the number of times a context switch resulted due to a process voluntarily giving up the processor before its time slice was completed (usually to await availability
+                             of a resource).
+                ru_nivcsw    the number of times a context switch resulted due to a higher priority process becoming runnable or because the current process exceeded its time slice.
+                */
+                fprintf(out, "maxrss %ld\nixrss %ld\nidrss %ld\nisrss %ld\n"
+                             "minflt %ld\nmajflt %ld\n"
+                             "nswap %ld\n"
+                             "inblock %ld\noublock %ld\n"
                              "msgsnd %ld\nmsgrcv %ld\n"
-                             "inblock %ld\noutblock %ld\n"
-                             "first %ld\n"
-                             "minflt %ld\nmaxflt %ld\n"
-                             "nswps %ld\nnsigs %ld\n"
-                        ,rusage.ru_nvcsw, rusage.ru_nivcsw,
-                        rusage.ru_isrss, rusage.ru_idrss, rusage.ru_ixrss, rusage.ru_maxrss,
-                        rusage.ru_msgsnd, rusage.ru_msgrcv,
-                        rusage.ru_inblock, rusage.ru_oublock,
-                        rusage.ru_first,
+                             "nsignals %ld\n"
+                             "ncvsw %ld\nnivcsw %ld\n",
+                        rusage.ru_maxrss, rusage.ru_ixrss, rusage.ru_idrss, rusage.ru_isrss,
                         rusage.ru_minflt, rusage.ru_majflt,
                         rusage.ru_nswap,
-                        rusage.ru_nsignals
-                       );
+                        rusage.ru_inblock, rusage.ru_oublock,
+                        rusage.ru_msgsnd, rusage.ru_msgrcv,
+                        rusage.ru_nsignals,
+                        rusage.ru_nvcsw, rusage.ru_nivcsw
+                        );
             }
-            clean_ctx(0, ctx);
-            // TODO
+
+            /* Terminate with child status */
             if (WIFEXITED(status)) {
-                exit(WEXITSTATUS(status));
+                exit(clean_ctx(WEXITSTATUS(status), ctx));
             } else if (WIFSIGNALED(status)) {
-                exit(-100-WTERMSIG(status));
+                fprintf(stderr, "child terminated by signal %d\n", WTERMSIG(status));
+                exit(clean_ctx(-100-WTERMSIG(status), ctx));
+            } else {
+                fprintf(stderr, "child terminated by ?\n");
+                exit(clean_ctx(-100, ctx));
             }
         }
     }
@@ -402,8 +460,8 @@ int main(int argc, char *const* argv) {
         if (*argv[i_argv] == '-') {
             for (const char * arg = argv[i_argv] + 1; *arg; arg++) {
                 switch (*arg) {
-                    case 't': ctx.flags |= TIME;        break ;
-                    case 'T': ctx.flags |= TIMEEXT;     break ;
+                    case 't': ctx.flags |= TIME_POSIX;  break ;
+                    case 'T': ctx.flags |= TIME_EXT;    break ;
                     case '1':
                         if ((ctx.flags & TO_STDERR) != 0)
                             ctx.flags |= WARN_MOREREDIRS;
@@ -422,7 +480,7 @@ int main(int argc, char *const* argv) {
     if (set_redirections(&ctx) != 0) {
         /* see comment inside set_redirections() method. Safest thing is to not display anything
          * on error. Error here is rare, but... TODO */
-        fprintf((ctx.flags & (TIME | TIMEEXT)) == 0 ? stderr
+        fprintf((ctx.flags & (TIME_POSIX | TIME_EXT)) == 0 ? stderr
                      : (ctx.flags & TO_STDERR) != 0 ? stdout : stderr,
                 "set_redirections(dup|dup2|open): %s\n", strerror(errno));
         exit(clean_ctx(ERR_REDIR, &ctx));
@@ -544,7 +602,7 @@ int main(int argc, char *const* argv) {
         /* execvp, in, if needed, a forked process */
         if (execvp(*newargv, newargv) < 0) {
             ret = ERR_EXEC;
-            fprintf(stderr, "`%s` (", *newargv); perror("execvp)");
+            fprintf(stderr, "`%s` (execvp): %s\n", *newargv, strerror(errno));
             break ;
         }
         /* not reachable */
