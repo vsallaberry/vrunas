@@ -145,7 +145,7 @@ static int usage(int ret, ctx_t * ctx) {
             "                 With -2: to stdout, otherwise, to stderr. To put timings in\n"
             "                 variable and display command: '$ t=`vrunas -2 -t ls -R /`'\n"
             "  -o|-O file   : redirect program stdout to file (-O:append).\n"
-            "                 With -1/-2, program stderr AND stdout are redirected to file.\n"
+            "                 With -1 or -2, program stderr AND stdout are redirected to file\n"
             "  -N           : create/open in/out file with New identity, after uid/gid switch\n"
             "  -i file      : program receives input from file instead of stdin.\n"
             "  -p priority  : set program priority (nice value from -20 to 20).\n"
@@ -601,6 +601,7 @@ int main(int argc, char *const* argv) {
                 char *  endptr = NULL;
                 uid_t   tmpuid;
                 gid_t   tmpgid;
+                int     tmp;
                 case '1':
                 case '2':
                 case 't':
@@ -610,14 +611,15 @@ int main(int argc, char *const* argv) {
                     if (++i_argv >= argc || arg[1])
                         return usage(ERR_OPTION+12, &ctx);
                     errno = 0;
-                    priority = strtol(argv[i_argv], &endptr, 0);
+                    tmp = strtol(argv[i_argv], &endptr, 0);
                     if (errno != 0 || *endptr != 0) {
                         fprintf(stderr, "error, bad priority '%s'\n", argv[i_argv]);
                         return clean_ctx(ERR_OPTION+11, &ctx);
                     }
                     if ((ctx.flags & HAVE_PRIORITY) != 0)
-                        fprintf(stderr, "warning, overriding previous priority '%d' with new value '%s'\n",
-                                priority, argv[i_argv]);
+                        fprintf(stderr, "warning, overriding previous priority '%d' with new value '%d'\n",
+                                priority, tmp);
+                    priority = tmp;
                     ctx.flags |= HAVE_PRIORITY;
                     break ;
                 case 'i':
