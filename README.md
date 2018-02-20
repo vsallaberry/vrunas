@@ -10,7 +10,10 @@
 
 ## Overview
 **vrunas** is a simple setuid()/setgid() wrapper running a process under specific user/group identity.
-Additionaly, it can print the id of a given user/group: uidgid=$(./vrunas -U root -G wheel)
+Additionaly, 
+- it can print the id of a given user/group: 'uidgid=$(./vrunas -U root -G wheel)'
+- it can print timings of the run process: 'vrunas -t sleep 2'
+- it can redirect stderr/stdout to stdout/stderr/anyFile: 'vrunas -1 -o log ls / /notfound'
 
 ## System requirements
 - A somewhat capable compiler (gcc/clang), make (GNU,BSD), sh (sh/bash/ksh)
