@@ -23,6 +23,7 @@
 #include <sys/wait.h>
 #include <sys/time.h>
 #include <sys/times.h>
+#include <sys/resource.h>
 #include <sched.h>
 #include <signal.h>
 #include <unistd.h>
@@ -51,6 +52,7 @@ enum FLAGS {
     TIME_EXT        = 1 << 7,
     WARN_MOREREDIRS = 1 << 8,
     FILE_NEWIDENTITY= 1 << 9,
+    HAVE_PRIORITY   = 1 << 10,
 };
 
 enum {
@@ -63,7 +65,8 @@ enum {
     ERR_SETOUT          = 7,
     ERR_BENCH           = 8,
     ERR_SETIN           = 9,
-    ERR_OPTION          = 10,
+    ERR_PRIORITY        = 10,
+    ERR_OPTION          = 30,
     ERR                 = -1,
     ERR_NOT_REACHABLE   = -128,
 };
@@ -120,14 +123,14 @@ static int usage(int ret, ctx_t * ctx) {
 
     header(out);
     fprintf(out, "Usage: %s [-h] [-u uid|user] [-g gid|group] [-U user] [-G group] [-t|-T]\n"
-                 "                [-1|-2] [-o|-O file] [-N] [-i file]"
+                 "                [-1|-2] [-o|-O file] [-N] [-i file] [-p priority]"
 #                             ifdef APP_INCLUDE_SOURCE
                               " [-s]"
 #                             endif
 #                             ifdef _TEST
                               /* nothing */
 #                             endif
-                              " [program [arguments]]\n"
+               "\n                [--] [program [arguments]]\n"
 #           ifdef APP_INCLUDE_SOURCE
             "  -s           : show source\n"
 #           endif
@@ -145,6 +148,7 @@ static int usage(int ret, ctx_t * ctx) {
             "                 With -1/-2, program stderr AND stdout are redirected to file.\n"
             "  -N           : create/open in/out file with New identity, after uid/gid switch\n"
             "  -i file      : program receives input from file instead of stdin.\n"
+            "  -p priority  : set program priority (nice value from -20 to 20).\n"
 #           ifdef _TEST
             /* nothing */
 #           endif
@@ -481,34 +485,41 @@ static int do_bench(ctx_t * ctx) {
 }
 
 int main(int argc, char *const* argv) {
-    ctx_t           ctx = { .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .alternatefile = NULL, .outfd = -1 };
+    ctx_t           ctx = { .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .alternatefile = NULL, .outfd = -1, .infd = -1 };
     char **         newargv = NULL;
     const char *    outfile = NULL;
     const char *    infile = NULL;
     uid_t           uid = 0;
     gid_t           gid = 0;
+    int             priority = 0;
     int             i_argv;
     int             ret = 0;
 
     /* first pass on command line to set redirections: nothing has to be written
      * on stdout/stderr until set_redirections() is called */
     for (i_argv = 1; i_argv < argc; i_argv++) {
-        if (*argv[i_argv] == '-') {
-            for (const char * arg = argv[i_argv] + 1; *arg; arg++) {
-                switch (*arg) {
-                    case 't': ctx.flags |= TIME_POSIX;  break ;
-                    case 'T': ctx.flags |= TIME_EXT;    break ;
-                    case '1':
-                        if ((ctx.flags & TO_STDERR) != 0)
-                            ctx.flags |= WARN_MOREREDIRS;
-                        ctx.flags = (ctx.flags & ~TO_STDERR) | TO_STDOUT;
-                        break ;
-                    case '2':
-                        if ((ctx.flags & TO_STDOUT) != 0)
-                            ctx.flags |= WARN_MOREREDIRS;
-                        ctx.flags = (ctx.flags & ~TO_STDOUT) | TO_STDERR;
-                        break ;
-                }
+        if (argv[i_argv][0] != '-' || (argv[i_argv][1] == '-' && argv[i_argv][2] == 0))
+            break ;
+        for (const char * arg = argv[i_argv] + 1; *arg; arg++) {
+            switch (*arg) {
+                case 'o':case'O':case'i':case'p':case'u':case'U':case'g':case'G':
+                    if (++i_argv >= argc || arg[1]) {
+                        i_argv = argc;
+                        while (arg[1]) arg++;
+                    }
+                    break ;
+                case 't': ctx.flags |= TIME_POSIX;  break ;
+                case 'T': ctx.flags |= TIME_EXT;    break ;
+                case '1':
+                    if ((ctx.flags & TO_STDERR) != 0)
+                        ctx.flags |= WARN_MOREREDIRS;
+                    ctx.flags = (ctx.flags & ~TO_STDERR) | TO_STDOUT;
+                    break ;
+                case '2':
+                    if ((ctx.flags & TO_STDOUT) != 0)
+                        ctx.flags |= WARN_MOREREDIRS;
+                    ctx.flags = (ctx.flags & ~TO_STDOUT) | TO_STDERR;
+                    break ;
             }
         }
     }
@@ -527,97 +538,111 @@ int main(int argc, char *const* argv) {
     }
     /* second pass on command line */
     for (i_argv = 1; i_argv < argc; i_argv++) {
-        if (*argv[i_argv] == '-') {
-            for (const char * arg = argv[i_argv] + 1; *arg; arg++) {
-                switch (*arg) {
-                    char *  endptr = NULL;
-                    uid_t   tmpuid;
-                    gid_t   tmpgid;
-                    case '1':
-                    case '2':
-                    case 't':
-                    case 'T':
-                        break ;
-                    case 'i':
-                        if (++i_argv >= argc || arg[1])
-                            return usage(ERR_OPTION+10, &ctx);
-                        if (infile != NULL)
-                            fprintf(stderr, "warning, overriding previous '-%c %s' with '-%c %s'\n",
-                                    *arg, infile, *arg, argv[i_argv]);
-                        infile = argv[i_argv];
-                        break ;
-                    case 'N': ctx.flags |= FILE_NEWIDENTITY; break ;
-                    case 'o':
-                    case 'O':
-                        if (++i_argv >= argc || arg[1])
-                            return usage(ERR_OPTION+9, &ctx);
-                        if (outfile != NULL)
-                            fprintf(stderr, "warning, overriding previous '-%c %s' with '-%c %s'\n",
-                                    (ctx.flags & OUT_APPEND) != 0 ? 'O' : 'o', outfile, *arg, argv[i_argv]);
-                        if (*arg == 'O')
-                            ctx.flags |= OUT_APPEND;
-                        else
-                            ctx.flags &= ~OUT_APPEND;
-                        outfile = argv[i_argv];
-                        break ;
-                    case 'u':
-                        if (++i_argv >= argc || arg[1])
-                            return usage(ERR_OPTION+8, &ctx);
-                        if ((ctx.flags & HAVE_UID) != 0)
-                            fprintf(stderr, "warning, overriding previous `-u` parameter with new value `%s`\n", argv[i_argv]);
-                        errno = 0;
-                        tmpuid = strtol(argv[i_argv], &endptr, 0);
-                        if ((errno != 0 || !endptr || *endptr != 0)
-                        && pwnam2id_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
-                            return clean_ctx(ERR_OPTION+7, &ctx);
-                        ctx.flags |= HAVE_UID;
-                        uid = tmpuid;
-                        break ;
-                    case 'U':
-                        if (++i_argv >= argc || arg[1])
-                            return usage(ERR_OPTION+6, &ctx);
-                        if (pwnam2id_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
-                            return clean_ctx(ERR_OPTION+5, &ctx);
-                        ctx.flags |= OPTIONAL_ARGS;
-                        fprintf(stdout, "%lu\n", (unsigned long) tmpuid);
-                        break ;
-                    case 'g':
-                        if (++i_argv >= argc || arg[1])
-                            return usage(ERR_OPTION+4, &ctx);
-                        if ((ctx.flags & HAVE_GID) != 0)
-                            fprintf(stderr, "warning, overriding previous `-g` parameter with new value `%s`\n", argv[i_argv]);
-                        errno = 0;
-                        tmpgid = strtol(argv[i_argv], &endptr, 0);
-                        if ((errno != 0 || !endptr || *endptr != 0)
-                        && grnam2id_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
-                            return clean_ctx(ERR_OPTION+3, &ctx);
-                        ctx.flags |= HAVE_GID;
-                        gid = tmpgid;
-                        break ;
-                    case 'G':
-                        if (++i_argv >= argc || arg[1])
-                            return usage(ERR_OPTION+2, &ctx);
-                        if (grnam2id_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
-                            return clean_ctx(ERR_OPTION+1, &ctx);
-                        ctx.flags |= OPTIONAL_ARGS;
-                        fprintf(stdout, "%lu\n", (unsigned long) tmpgid);
-                        break ;
+        if (argv[i_argv][0] != '-' || (argv[i_argv][1] == '-' && argv[i_argv][2] == 0 && ++i_argv))
+            break ;
+        for (const char * arg = argv[i_argv] + 1; *arg; arg++) {
+            switch (*arg) {
+                char *  endptr = NULL;
+                uid_t   tmpuid;
+                gid_t   tmpgid;
+                case '1':
+                case '2':
+                case 't':
+                case 'T':
+                    break ;
+                case 'p':
+                    if (++i_argv >= argc || arg[1])
+                        return usage(ERR_OPTION+12, &ctx);
+                    errno = 0;
+                    priority = strtol(argv[i_argv], &endptr, 0);
+                    if (errno != 0 || *endptr != 0) {
+                        fprintf(stderr, "error, bad priority '%s'\n", argv[i_argv]);
+                        return clean_ctx(ERR_OPTION+11, &ctx);
+                    }
+                    if ((ctx.flags & HAVE_PRIORITY) != 0)
+                        fprintf(stderr, "warning, overriding previous priority '%d' with new value '%s'\n",
+                                priority, argv[i_argv]);
+                    ctx.flags |= HAVE_PRIORITY;
+                    break ;
+                case 'i':
+                    if (++i_argv >= argc || arg[1])
+                        return usage(ERR_OPTION+10, &ctx);
+                    if (infile != NULL)
+                        fprintf(stderr, "warning, overriding previous '-%c %s' with '-%c %s'\n",
+                                *arg, infile, *arg, argv[i_argv]);
+                    infile = argv[i_argv];
+                    break ;
+                case 'N': ctx.flags |= FILE_NEWIDENTITY; break ;
+                case 'o':
+                case 'O':
+                    if (++i_argv >= argc || arg[1])
+                        return usage(ERR_OPTION+9, &ctx);
+                    if (outfile != NULL)
+                        fprintf(stderr, "warning, overriding previous '-%c %s' with '-%c %s'\n",
+                                (ctx.flags & OUT_APPEND) != 0 ? 'O' : 'o', outfile, *arg, argv[i_argv]);
+                    if (*arg == 'O')
+                        ctx.flags |= OUT_APPEND;
+                    else
+                        ctx.flags &= ~OUT_APPEND;
+                    outfile = argv[i_argv];
+                    break ;
+                case 'u':
+                    if (++i_argv >= argc || arg[1])
+                        return usage(ERR_OPTION+8, &ctx);
+                    if ((ctx.flags & HAVE_UID) != 0)
+                        fprintf(stderr, "warning, overriding previous `-u` parameter with new value `%s`\n", argv[i_argv]);
+                    errno = 0;
+                    tmpuid = strtol(argv[i_argv], &endptr, 0);
+                    if ((errno != 0 || !endptr || *endptr != 0)
+                    && pwnam2id_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
+                        return clean_ctx(ERR_OPTION+7, &ctx);
+                    ctx.flags |= HAVE_UID;
+                    uid = tmpuid;
+                    break ;
+                case 'U':
+                    if (++i_argv >= argc || arg[1])
+                        return usage(ERR_OPTION+6, &ctx);
+                    if (pwnam2id_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
+                        return clean_ctx(ERR_OPTION+5, &ctx);
+                    ctx.flags |= OPTIONAL_ARGS;
+                    fprintf(stdout, "%lu\n", (unsigned long) tmpuid);
+                    break ;
+                case 'g':
+                    if (++i_argv >= argc || arg[1])
+                        return usage(ERR_OPTION+4, &ctx);
+                    if ((ctx.flags & HAVE_GID) != 0)
+                        fprintf(stderr, "warning, overriding previous `-g` parameter with new value `%s`\n", argv[i_argv]);
+                    errno = 0;
+                    tmpgid = strtol(argv[i_argv], &endptr, 0);
+                    if ((errno != 0 || !endptr || *endptr != 0)
+                    && grnam2id_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
+                        return clean_ctx(ERR_OPTION+3, &ctx);
+                    ctx.flags |= HAVE_GID;
+                    gid = tmpgid;
+                    break ;
+                case 'G':
+                    if (++i_argv >= argc || arg[1])
+                        return usage(ERR_OPTION+2, &ctx);
+                    if (grnam2id_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
+                        return clean_ctx(ERR_OPTION+1, &ctx);
+                    ctx.flags |= OPTIONAL_ARGS;
+                    fprintf(stdout, "%lu\n", (unsigned long) tmpgid);
+                    break ;
 #                   ifdef APP_INCLUDE_SOURCE
-                    case 's':
-                        for (const char *const* line = vrunas_get_source(); *line; line++)
-                            fprintf(stdout, "%s", *line);
-                        break ;
+                case 's':
+                    for (const char *const* line = vrunas_get_source(); *line; line++)
+                        fprintf(stdout, "%s", *line);
+                    break ;
 #                   endif
 #                   ifdef _TEST
-                    case 'd': break ;
+                case 'd': break ;
 #                   endif
-                    case 'h': return usage(0, &ctx);
-                    default:
-                        fprintf(stderr, "unknown option '-%c'\n", *arg);
-                        return usage(ERR_OPTION, &ctx);
-                }
+                case 'h': return usage(0, &ctx);
+                default:
+                    fprintf(stderr, "unknown option '-%c'\n", *arg);
+                    return usage(ERR_OPTION, &ctx);
             }
-        } else break ;
+        }
     }
     /* clean now unnecessary resources */
     if (ctx.buf) {
@@ -648,6 +673,11 @@ int main(int argc, char *const* argv) {
             break ;
         if ((newargv = build_argv(argc - i_argv, argv + i_argv, &ctx)) == NULL && ((ret = ERR_BUILDARGV) || 1))
             break ;
+        if ((ctx.flags & HAVE_PRIORITY) != 0 && setpriority(PRIO_PROCESS, getpid(), priority) < 0) {
+            ret = ERR_PRIORITY;
+            fprintf(stderr, "setpriority(%d): %s\n", priority, strerror(errno));
+            break ;
+        }
         /* execvp, in, if needed, a forked process */
         if (execvp(*newargv, newargv) < 0) {
             ret = ERR_EXEC;
