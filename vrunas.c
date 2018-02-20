@@ -133,8 +133,8 @@ static int usage(int ret, ctx_t * ctx) {
 #           endif
             "  -u uid|user  : change uid\n"
             "  -g gid|group : change gid\n"
-            "  -U user      : print uid of user, no program arguments needed.\n"
-            "  -G group     : print gid of group, no program arguments needed.\n"
+            "  -U user      : print uid of user, no program and arguments required.\n"
+            "  -G group     : print gid of group, no program and arguments required.\n"
             "  -1|-2        : redirect program stderr or stdout to respectively stdout(-1)\n"
             "                 or stderr(-2)\n"
             "  -t|-T        : print timings of program (-t:'time -p' POSIX, -T:extended)\n"
@@ -426,33 +426,35 @@ static int do_bench(ctx_t * ctx) {
                         rusage.ru_stime.tv_sec, rusage.ru_stime.tv_usec / 10000);
             }
             if ((ctx->flags & TIME_EXT) != 0) {
-                /*
-                ru_utime     the total amount of time spent executing in user mode.
-                ru_stime     the total amount of time spent in the system executing on behalf of the process(es).
-                ru_maxrss    the maximum resident set size utilized (in bytes).
-                ru_ixrss     an integral value indicating the amount of memory used by the text segment that was also shared among other processes.
-                             This value is expressed in units of kilobytes * ticks-of-execution.
-                ru_idrss     an integral value of the amount of unshared memory residing in the data segment of a process (expressed in units of kilobytes * ticks-of-execution).
-                ru_isrss     an integral value of the amount of unshared memory residing in the stack segment of a process (expressed in units of kilobytes * ticks-of-execution).
-                ru_minflt    the number of page faults serviced without any I/O activity; here I/O activity is avoided by reclaiming a page frame from the list of pages awaiting reallocation.
-                ru_majflt    the number of page faults serviced that required I/O activity.
-                ru_nswap     the number of times a process was swapped out of main memory.
-                ru_inblock   the number of times the file system had to perform input.
-                ru_oublock   the number of times the file system had to perform output.
-                ru_msgsnd    the number of IPC messages sent.
-                ru_msgrcv    the number of IPC messages received.
-                ru_nsignals  the number of signals delivered.
-                ru_nvcsw     the number of times a context switch resulted due to a process voluntarily giving up the processor before its time slice was completed (usually to await availability
-                             of a resource).
-                ru_nivcsw    the number of times a context switch resulted due to a higher priority process becoming runnable or because the current process exceeded its time slice.
-                */
-                fprintf(out, "maxrss %ld\nixrss %ld\nidrss %ld\nisrss %ld\n"
-                             "minflt %ld\nmajflt %ld\n"
-                             "nswap %ld\n"
-                             "inblock %ld\noublock %ld\n"
-                             "msgsnd %ld\nmsgrcv %ld\n"
-                             "nsignals %ld\n"
-                             "ncvsw %ld\nnivcsw %ld\n",
+                /* ru_utime     the total amount of time spent executing in user mode.
+                   ru_stime     the total amount of time spent in the system executing on behalf of the process(es). */
+                fprintf(out, "maxrss   % 10ld (the maximum resident set size utilized (in bytes).)\n"
+                             "ixrss    % 10ld (an integral value indicating the amount of memory used "
+                                              "by the text segment that was also shared among other "
+                                              "processes. This value is expressed in units of "
+                                              "kilobytes * ticks-of-execution.)\n"
+                             "idrss    % 10ld (an integral value of the amount of unshared memory residing "
+                                              "in the data segment of a process (expressed in units of "
+                                              "kilobytes * ticks-of-execution).\n"
+                             "isrss    % 10ld (an integral value of the amount of unshared memory residing "
+                                              "in the stack segment of a process (expressed in units of "
+                                              "kilobytes * ticks-of-execution).)\n"
+                             "minflt   % 10ld (the number of page faults serviced without any I/O activity; "
+                                              "here I/O activity is avoided by reclaiming a page frame from "
+                                              "the list of pages awaiting reallocation.)\n"
+                             "majflt   % 10ld (the number of page faults serviced that required I/O activity.)\n"
+                             "nswap    % 10ld (the number of times a process was swapped out of main memory.)\n"
+                             "inblock  % 10ld (the number of times the file system had to perform input.)\n"
+                             "oublock  % 10ld (the number of times the file system had to perform output.)\n"
+                             "msgsnd   % 10ld (the number of IPC messages sent.)\n"
+                             "msgrcv   % 10ld (the number of IPC messages received.)\n"
+                             "nsignals % 10ld (the number of signals delivered.)\n"
+                             "ncvsw    % 10ld (the number of times a context switch resulted due to a process "
+                                              "voluntarily giving up the processor before its time slice was "
+                                              "completed (usually to await availability of a resource).)\n"
+                             "nivcsw   % 10ld (the number of times a context switch resulted due to a higher "
+                                              "priority process becoming runnable or because the current "
+                                              "process exceeded its time slice.)\n",
                         rusage.ru_maxrss, rusage.ru_ixrss, rusage.ru_idrss, rusage.ru_isrss,
                         rusage.ru_minflt, rusage.ru_majflt,
                         rusage.ru_nswap,
