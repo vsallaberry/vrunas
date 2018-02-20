@@ -244,14 +244,14 @@ int set_uidgid(uid_t uid, gid_t gid, ctx_t * ctx) {
         if (setgid(gid) < 0) {
             fprintf(stderr, "`%lu` (setgid): %s\n", (unsigned long) gid, strerror(errno));
             return ERR_SETID;
-        } else fprintf(stderr, "setting gid to %u\n", gid);
+        }
     }
     /* set uid if given */
     if ((ctx->flags & HAVE_UID) != 0) {
         if (setuid(uid) < 0) {
             fprintf(stderr, "`%lu` (setuid): %s\n", (unsigned long) uid, strerror(errno));
             return ERR_SETID;
-        } else fprintf(stderr, "setting uid to %u\n", uid);
+        }
     }
     return 0;
 }
