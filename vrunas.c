@@ -663,7 +663,7 @@ int main(int argc, char *const* argv) {
                     if (pwnam2id_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
                         return clean_ctx(ERR_OPTION+5, &ctx);
                     ctx.flags |= OPTIONAL_ARGS;
-                    fprintf(stdout, "%lu\n", (unsigned long) tmpuid);
+                    fprintf(stdout, "%d\n", (int) tmpuid);
                     break ;
                 case 'g':
                     if (++i_argv >= argc || arg[1])
@@ -684,7 +684,7 @@ int main(int argc, char *const* argv) {
                     if (grnam2id_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
                         return clean_ctx(ERR_OPTION+1, &ctx);
                     ctx.flags |= OPTIONAL_ARGS;
-                    fprintf(stdout, "%lu\n", (unsigned long) tmpgid);
+                    fprintf(stdout, "%d\n", (int) tmpgid);
                     break ;
 #                   ifdef APP_INCLUDE_SOURCE
                 case 's':
