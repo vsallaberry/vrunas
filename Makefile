@@ -49,17 +49,14 @@ SUBMODROOTDIR	= ext
 
 # SUBDIRS, put empty if there is no need to run make on sub directories.
 LIB_VLIBDIR	= $(SUBMODROOTDIR)/vlib
-#SUBDIRS 	= $(LIB_VLIBDIR)
-SUBDIRS		=
+SUBDIRS 	= $(LIB_VLIBDIR)
 # SUBLIBS: libraries produced from SUBDIRS, needed correct build order. Put empty if none.
 LIB_VLIB	= $(LIB_VLIBDIR)/libvlib.a
-#SUBLIBS		= $(LIB_VLIB)
-SUBLIBS		=
+SUBLIBS		= $(LIB_VLIB)
 
 # INCDIRS: Folder where public includes are. It can be SRCDIR or even empty if
 # headers are only in SRCDIR. Use '.' for current directory.
-#INCDIRS 	= $(LIB_VLIBDIR)/include
-INCDIRS 	=
+INCDIRS 	= $(LIB_VLIBDIR)/include
 
 # Where targets are created (OBJs, BINs, ...). Eg: '.' or 'build'. ONLY 'SRCDIR' is supported!
 BUILDDIR	= $(SRCDIR)
@@ -84,7 +81,7 @@ ARCH_RELEASE	= -march=native # -arch i386 -arch x86_64
 OPTI_COMMON	= -pipe -fstack-protector
 OPTI_RELEASE	= -O3 $(OPTI_COMMON)
 INCS_RELEASE	=
-LIBS_RELEASE	= $(SUBLIBS)
+LIBS_RELEASE	= $(SUBLIBS) -lpthread
 MACROS_RELEASE	=
 WARN_DEBUG	= $(WARN_RELEASE) # -Werror
 ARCH_DEBUG	= $(ARCH_RELEASE)
@@ -111,7 +108,7 @@ FLAGS_GCJ	=
 #LIBS_GNUCXX_XTRA_darwin_/usr/bin/clangpppp=-stdlib=libstdc++
 #INCS_darwin	= $(FLAGS_GNUCXX_XTRA_$(UNAME_SYS)_$(CXX:++=pppp))
 #LIBS_darwin	= -framework IOKit -framework Foundation $(LIBS_GNUCXX_XTRA_$(UNAME_SYS)_$(CXX:++=pppp))
-LIBS_linux	= -lrt
+LIBS_linux	= -lrt -ldl
 
 # TESTS and DEBUG parameters
 # VALGRIND_RUN_PROGRAM: how to run the program with valgrind (can be used to pass arguments to valgrind)

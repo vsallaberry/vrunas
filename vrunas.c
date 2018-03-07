@@ -28,18 +28,59 @@
 #include <signal.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
 #include <errno.h>
-#include <pwd.h>
-#include <grp.h>
 
 #ifdef HAVE_VERSION_H
 # include "version.h"
 #endif
+
+#include "vlib/options.h"
+#include "vlib/time.h"
+#include "vlib/account.h"
+#include "vlib/log.h"
+
+#define VERSION_STRING OPT_VERSION_STRING_GPL3PLUS(BUILD_APPNAME, APP_VERSION, \
+                                    "git:" BUILD_GITREV, "Vincent Sallaberry", "2018")
+
+static const opt_options_desc_t s_opt_desc[] = {
+#   ifdef APP_INCLUDE_SOURCE
+    { 's', "source",        NULL,           "show source code" },
+#   endif
+    { 'u', "user",          "uid|user",     "change uid" },
+    { 'g', "group",         "gid|group",    "change gid" },
+    { 'U', "print-uid",     "user",         "print uid of user, no program and arguments required." },
+    { 'G', "print-gid",     "group",        "print gid of group, no program and arguments required." },
+    { '1', "to-stdout",     NULL,           "redirect program stderr to stdout" },
+    { '2', "to-stderr",     NULL,           "redirect program stdout to stderr" },
+        /* "  -1|-2        : redirect program stderr or stdout to respectively stdout(-1) or stderr(-2)" */
+    { 't', "time",          NULL,           "print timings of program ('time -p' POSIX format)\n"
+                                            "With -1: timings will be printed to stderr.\n"
+                                            "With -2: to stdout, otherwise, to stderr. To put timings in"
+                                            "variable and display command: '$ t=`vrunas -2 -t ls -R /`'" },
+    { 'T', "time-extended", NULL,           "same as -t/--time but with extended format." },
+        /* "  -t|-T        : print timings of program (-t:'time -p' POSIX, -T:extended)\n"
+            "                 With -1: timings will be printed to stderr.\n"
+            "                 With -2: to stdout, otherwise, to stderr. To put timings in\n"
+            "                 variable and display command: '$ t=`vrunas -2 -t ls -R /`'\n" */
+    { 'o', "output",        "file",         "redirect program stdout to file.\n"
+                                            "With -1 or -2, program stderr AND stdout are redirected to file" },
+    { 'O', "append-to",     "file",         "same as -o/--output but append to file" },
+        /*  "  -o|-O file   : redirect program stdout to file (-O:append).\n"
+            "                 With -1 or -2, program stderr AND stdout are redirected to file\n" */
+    { 'N', "new-identity",  NULL,           "create/open in/out file with New identity, after uid/gid switch" },
+    { 'i', "input",         "file",         "program receives input from file instead of stdin." },
+    { 'p', "priority",      "priority",     "set program priority (nice value from -20 to 20)." },
+#   ifdef _TEST
+    /* nothing */
+#   endif
+    { 'V', "version",       NULL,           "version" },
+    { 'h', "help",          NULL,           "help" },
+    { 0, NULL, NULL, NULL }
+};
 
 enum FLAGS {
     HAVE_UID        = 1 << 0,
@@ -72,6 +113,7 @@ enum {
 };
 
 typedef struct {
+    log_t *             log;
     int                 flags;
     int                 argc;
     char *const*        argv;
@@ -80,6 +122,7 @@ typedef struct {
     FILE *              alternatefile;  /* file not used for application output, can be used to display bench */
     int                 outfd;          /* fd of file receving program output, -1 if stdout or stderr */
     int                 infd;           /* fd of file replacing program input, -1 if stdin */
+    opt_config_t *      opt_config;     /* FIXME to be removed */
 } ctx_t;
 
 static int clean_ctx(int ret, ctx_t * ctx) {
@@ -104,138 +147,9 @@ static int clean_ctx(int ret, ctx_t * ctx) {
     return ret;
 }
 
-static void header(FILE * out) {
-    fprintf(out, "%s v%s %s built on %s, %s from git:%s\n\n",
-#           ifdef HAVE_VERSION_H
-            BUILD_APPNAME, APP_VERSION, BUILD_APPRELEASE, __DATE__, __TIME__, BUILD_GITREV
-#           else
-            "vrunas", "?", __DATE__, __TIME__, "?"
-#           endif
-            );
-    fprintf(out, "Copyright (C) 2018 Vincent Sallaberry.\n"
-                 "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n" \
-                 "This is free software: you are free to change and redistribute it.\n" \
-                 "There is NO WARRANTY, to the extent permitted by law.\n\n");
-}
-
-static int usage(int ret, ctx_t * ctx) {
-    FILE * out = ret ? stderr : stdout;
-
-    header(out);
-    fprintf(out, "Usage: %s [-h] [-u uid|user] [-g gid|group] [-U user] [-G group] [-t|-T]\n"
-                 "                [-1|-2] [-o|-O file] [-N] [-i file] [-p priority]"
-#                             ifdef APP_INCLUDE_SOURCE
-                              " [-s]"
-#                             endif
-#                             ifdef _TEST
-                              /* nothing */
-#                             endif
-               "\n                [--] [program [arguments]]\n"
-#           ifdef APP_INCLUDE_SOURCE
-            "  -s           : show source\n"
-#           endif
-            "  -u uid|user  : change uid\n"
-            "  -g gid|group : change gid\n"
-            "  -U user      : print uid of user, no program and arguments required.\n"
-            "  -G group     : print gid of group, no program and arguments required.\n"
-            "  -1|-2        : redirect program stderr or stdout to respectively stdout(-1)\n"
-            "                 or stderr(-2)\n"
-            "  -t|-T        : print timings of program (-t:'time -p' POSIX, -T:extended)\n"
-            "                 With -1: timings will be printed to stderr.\n"
-            "                 With -2: to stdout, otherwise, to stderr. To put timings in\n"
-            "                 variable and display command: '$ t=`vrunas -2 -t ls -R /`'\n"
-            "  -o|-O file   : redirect program stdout to file (-O:append).\n"
-            "                 With -1 or -2, program stderr AND stdout are redirected to file\n"
-            "  -N           : create/open in/out file with New identity, after uid/gid switch\n"
-            "  -i file      : program receives input from file instead of stdin.\n"
-            "  -p priority  : set program priority (nice value from -20 to 20).\n"
-#           ifdef _TEST
-            /* nothing */
-#           endif
-            "  -h           : help\n"
-            "\n", (ctx && ctx->argv ? *ctx->argv : "vrunas"));
+static int usage(int ret, ctx_t * ctx) { // TODO
+    opt_usage(ret, ctx->opt_config);
     return clean_ctx(ret, ctx);
-}
-
-static int nam2id_alloc_r(char ** pbuf, size_t * pbufsz) {
-    if (pbuf == NULL || pbufsz == NULL)
-        return -1;
-    if (*pbuf == NULL) {
-        static const int    confs[] = { _SC_GETPW_R_SIZE_MAX, _SC_GETGR_R_SIZE_MAX };
-        long                size = 0, ret;
-        for (size_t i = 0; i < sizeof(confs) / sizeof(*confs); i++) {
-            if ((ret = sysconf(confs[i])) > size)
-                size = ret;
-        }
-        *pbufsz = (size > 0 ? size : 16384);
-        if ((*pbuf = malloc(*pbufsz)) == NULL)
-            fprintf(stderr, "nam2id_alloc(malloc): %s\n", strerror(errno));
-    }
-    return *pbuf ? 0 : -1;
-}
-
-/**
- * pwnamid_r(): wrapper to getpwnam_r() with automatic memory allocation.
- * @param str the user_name to look for
- * @param uid the resulting uid
- * @param pbuf the pointer to buffer used by getpwnam_r. if NULL it is malloced and
- *             freed, if not null and allocated, it is used, if not null and not
- *             allocated, it is malloced. When pbuf not null, the caller must free *pbuf.
- * @param pbufsz the pointer to size of *pbuf
- * @return 0 on success (str, *uid, *pbuf and *pbufsz usable, -1 otherwise)
- */
-static int pwnam2id_r(const char * str, uid_t *uid, char ** pbuf, size_t * pbufsz) {
-    struct passwd       pwd;
-    struct passwd *     pwdres;
-    char *              buf = NULL;
-    size_t              bufsz;
-    int                 ret = -1;
-
-    if (!pbuf)      pbuf    = &buf;
-    if (!pbufsz)    pbufsz  = &bufsz;
-    if (nam2id_alloc_r(pbuf, pbufsz) != 0) {
-        return -1;
-    }
-
-    if (((str == NULL || uid == NULL) && (errno = EFAULT))
-    ||  getpwnam_r(str, &pwd, *pbuf, *pbufsz, &pwdres) != 0
-    ||  (pwdres == NULL && (errno = EINVAL))) {
-        fprintf(stderr, "user `%s` (getpwnam_r): %s\n", str, strerror(errno));
-    } else {
-        ret = errno = 0;
-        *uid = pwdres->pw_uid;
-    }
-    if (pbuf == &buf)
-        free(*pbuf);
-    return ret;
-}
-
-/** grnam2id_r(): wrapper to getgrnam_r() with automatic memory allocation.
- * See pwnam2id_r() */
-static int grnam2id_r(const char * str, gid_t *gid, char ** pbuf, size_t * pbufsz) {
-    struct group        pwd;
-    struct group *      pwdres;
-    char *              buf = NULL;
-    size_t              bufsz;
-    int                 ret = -1;
-
-    if (!pbuf)      pbuf    = &buf;
-    if (!pbufsz)    pbufsz  = &bufsz;
-    if (nam2id_alloc_r(pbuf, pbufsz) != 0) {
-        return -1;
-    }
-
-    if (((str == NULL || gid == NULL) && (errno = EFAULT))
-    ||  getgrnam_r(str, &pwd, *pbuf, *pbufsz, &pwdres) != 0
-    ||  (pwdres == NULL && (errno = EINVAL))) {
-        fprintf(stderr, "group `%s` (getgrnam_r): %s\n", str, strerror(errno));
-    } else {
-        ret = errno = 0;
-        *gid = pwdres->gr_gid;
-    }
-    if (pbuf == &buf)
-        free(*pbuf);
-    return ret;
 }
 
 int set_uidgid(uid_t uid, gid_t gid, ctx_t * ctx) {
@@ -373,64 +287,13 @@ static void sig_handler(int sig) {
     kill(pid, sig);
 }
 
-
-#if defined(__APPLE__) && !defined(CLOCK_MONOTONIC)
-# include <mach/mach.h>
-# include <mach/clock.h>
-# define CLOCK_MONOTONIC 0
-int wrap_clock_gettime(int id, struct timespec * ts) {
-    static int              init_done = 0;
-    static host_t           host;
-    static clock_serv_t     clock_serv;
-    mach_timespec_t         mts;
-    (void)id;
-
-    if (!init_done) {
-        /* i don't think it is thread safe but i don't need it */
-        host = mach_host_self();
-        if (host_get_clock_service(host, REALTIME_CLOCK, &clock_serv) != KERN_SUCCESS) {
-            fprintf(stderr, "wrap_clock_gettime(): mach host_get_clock_service() error\n");
-            errno = EINVAL;
-            return -1;
-        }
-        init_done = 1;
-    }
-
-    if (clock_get_time(clock_serv, &mts) != KERN_SUCCESS) {
-        fprintf(stderr, "wrap_clock_gettime(): mack clock_get_time() error\n");
-        errno = EINVAL;
-        return -1;
-    }
-    ts->tv_sec = mts.tv_sec;
-    ts->tv_nsec = mts.tv_nsec;
-    return 0;
-}
-/*kern_return_t host_get_clock_service(host_t host, clock_id_t clock_id / * REALTIME_CLOCK * /, clock_serv_t *clock_serv);
-kern_return_t clock_get_time(clock_serv_t clock_serv,mach_timespec_t *cur_ time //tv_nsec, tv_sec);*/
-#elif !defined(CLOCK_MONOTONIC)
-# define CLOCK_MONOTONIC 0
-# pragma message "warning, CLOCK_MONOTONIC (and maybe clock_gettime()) is not defined, using gettimeofday."
-int wrap_clock_gettime(int id, struct timespec * ts) {
-    struct timeval tv;
-    if (gettimeofday(&tv, NULL) < 0) {
-        fprintf(stderr, "wrap_clock_gettime(gettimeofday): %s\n", strerror(errno));
-        return -1;
-    }
-    ts->tv_sec = tv.tv_sec;
-    ts->tv_nsec = tv.tv_usec * 1000;
-    return 0;
-}
-#else
-# define wrap_clock_gettime clock_gettime
-#endif
-
 static int do_bench(ctx_t * ctx) {
     if ((ctx->flags & (TIME_POSIX | TIME_EXT)) != 0) {
         pid_t           wpid, pid;
         struct timespec ts0;
 
-        if (wrap_clock_gettime(CLOCK_MONOTONIC, &ts0) < 0) {
-            fprintf(stderr, "bench: clock_gettime#1 error: %s\n", strerror(errno));
+        if (vclock_gettime(CLOCK_MONOTONIC, &ts0) < 0) {
+            fprintf(stderr, "bench: vclock_gettime#1 error: %s\n", strerror(errno));
             memset(&ts0, 0, sizeof(ts0));
         }
         if ((pid = fork()) < 0) {
@@ -463,8 +326,8 @@ static int do_bench(ctx_t * ctx) {
                 perror("waitpid");
 
             /* get timings and other stats */
-            if (wrap_clock_gettime(CLOCK_MONOTONIC, &ts1) < 0) {
-                fprintf(stderr, "bench: clock_gettime#2 error: %s\n", strerror(errno));
+            if (vclock_gettime(CLOCK_MONOTONIC, &ts1) < 0) {
+                fprintf(stderr, "bench: vclock_gettime#2 error: %s\n", strerror(errno));
                 memset(&ts1, 0, sizeof(ts1));
             }
             tv0.tv_sec = ts0.tv_sec;
@@ -540,8 +403,18 @@ static int do_bench(ctx_t * ctx) {
     return 0;
 }
 
+/** parse_option() : option callback of type opt_option_callback_t. see vlib/options.h */
+static int parse_option_first_pass(int opt, const char *arg, int *i_argv, const opt_config_t * opt_config) {
+    return OPT_CONTINUE(0);
+}
+static int parse_option(int opt, const char *arg, int *i_argv, const opt_config_t * opt_config) {
+    return OPT_CONTINUE(0);
+}
+
 int main(int argc, char *const* argv) {
-    ctx_t           ctx = { .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .alternatefile = NULL, .outfd = -1, .infd = -1 };
+    log_t           log = { .level = LOG_LVL_VERBOSE, .out = stderr, .flags = LOG_FLAG_NONE, .prefix = NULL };
+    ctx_t           ctx = { .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .alternatefile = NULL, .outfd = -1, .infd = -1, .log = &log };
+    opt_config_t    opt_config  = { argc, argv, parse_option_first_pass, s_opt_desc, VERSION_STRING, &ctx };
     char **         newargv = NULL;
     const char *    outfile = NULL;
     const char *    infile = NULL;
@@ -550,6 +423,16 @@ int main(int argc, char *const* argv) {
     int             priority = 0;
     int             i_argv;
     int             ret = 0;
+
+    /* Manage program options */
+    log_set_vlib_instance(&log);
+    ctx.opt_config = &opt_config;
+    /* TODO
+    for ( ; opt_config.callback == parse_option_first_pass; opt_config.callback = parse_option ) {
+        if (OPT_IS_EXIT(ret = opt_parse_options(&opt_config))) {
+            return clean_ctx(OPT_EXIT_CODE(result));
+        }
+    }*/
 
     /* first pass on command line to set redirections: nothing has to be written
      * on stdout/stderr until set_redirections() is called */
@@ -652,7 +535,7 @@ int main(int argc, char *const* argv) {
                     errno = 0;
                     tmpuid = strtol(argv[i_argv], &endptr, 0);
                     if ((errno != 0 || !endptr || *endptr != 0)
-                    && pwnam2id_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
+                    && pwfindid_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
                         return clean_ctx(ERR_OPTION+7, &ctx);
                     ctx.flags |= HAVE_UID;
                     uid = tmpuid;
@@ -660,7 +543,7 @@ int main(int argc, char *const* argv) {
                 case 'U':
                     if (++i_argv >= argc || arg[1])
                         return usage(ERR_OPTION+6, &ctx);
-                    if (pwnam2id_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
+                    if (pwfindid_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
                         return clean_ctx(ERR_OPTION+5, &ctx);
                     ctx.flags |= OPTIONAL_ARGS;
                     fprintf(stdout, "%d\n", (int) tmpuid);
@@ -673,7 +556,7 @@ int main(int argc, char *const* argv) {
                     errno = 0;
                     tmpgid = strtol(argv[i_argv], &endptr, 0);
                     if ((errno != 0 || !endptr || *endptr != 0)
-                    && grnam2id_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
+                    && grfindid_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
                         return clean_ctx(ERR_OPTION+3, &ctx);
                     ctx.flags |= HAVE_GID;
                     gid = tmpgid;
@@ -681,7 +564,7 @@ int main(int argc, char *const* argv) {
                 case 'G':
                     if (++i_argv >= argc || arg[1])
                         return usage(ERR_OPTION+2, &ctx);
-                    if (grnam2id_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
+                    if (grfindid_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
                         return clean_ctx(ERR_OPTION+1, &ctx);
                     ctx.flags |= OPTIONAL_ARGS;
                     fprintf(stdout, "%d\n", (int) tmpgid);
@@ -717,7 +600,7 @@ int main(int argc, char *const* argv) {
             break ;
         }
         /* program header */
-        header(stdout);
+        fprintf(stdout, VERSION_STRING "\n\n");
         /* prepare priority, uid, gid, newargv, outfile, bench for excvp */
         if ((ctx.flags & HAVE_PRIORITY) != 0 && setpriority(PRIO_PROCESS, getpid(), priority) < 0) {
             ret = ERR_PRIORITY;
