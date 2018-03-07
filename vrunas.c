@@ -59,7 +59,7 @@ static const opt_options_desc_t s_opt_desc[] = {
         /* "  -1|-2        : redirect program stderr or stdout to respectively stdout(-1) or stderr(-2)" */
     { 't', "time",          NULL,           "print timings of program ('time -p' POSIX format)\n"
                                             "With -1: timings will be printed to stderr.\n"
-                                            "With -2: to stdout, otherwise, to stderr. To put timings in"
+                                            "With -2: to stdout, otherwise, to stderr. To put timings in "
                                             "variable and display command: '$ t=`vrunas -2 -t ls -R /`'" },
     { 'T', "time-extended", NULL,           "same as -t/--time but with extended format." },
         /* "  -t|-T        : print timings of program (-t:'time -p' POSIX, -T:extended)\n"
@@ -122,6 +122,11 @@ typedef struct {
     FILE *              alternatefile;  /* file not used for application output, can be used to display bench */
     int                 outfd;          /* fd of file receving program output, -1 if stdout or stderr */
     int                 infd;           /* fd of file replacing program input, -1 if stdin */
+    const char *        outfile;
+    const char *        infile;
+    uid_t               uid;
+    gid_t               gid;
+    int                 priority;
     opt_config_t *      opt_config;     /* FIXME to be removed */
 } ctx_t;
 
@@ -413,14 +418,12 @@ static int parse_option(int opt, const char *arg, int *i_argv, const opt_config_
 
 int main(int argc, char *const* argv) {
     log_t           log = { .level = LOG_LVL_VERBOSE, .out = stderr, .flags = LOG_FLAG_NONE, .prefix = NULL };
-    ctx_t           ctx = { .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .alternatefile = NULL, .outfd = -1, .infd = -1, .log = &log };
+    ctx_t           ctx = {
+        .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .alternatefile = NULL, .outfd = -1, .infd = -1, .log = &log,
+        .outfile = NULL, .infile = NULL, .uid = 0, .gid = 0, .priority = 0,
+    };
     opt_config_t    opt_config  = { argc, argv, parse_option_first_pass, s_opt_desc, VERSION_STRING, &ctx };
     char **         newargv = NULL;
-    const char *    outfile = NULL;
-    const char *    infile = NULL;
-    uid_t           uid = 0;
-    gid_t           gid = 0;
-    int             priority = 0;
     int             i_argv;
     int             ret = 0;
 
@@ -501,31 +504,31 @@ int main(int argc, char *const* argv) {
                     }
                     if ((ctx.flags & HAVE_PRIORITY) != 0)
                         fprintf(stderr, "warning, overriding previous priority '%d' with new value '%d'\n",
-                                priority, tmp);
-                    priority = tmp;
+                                ctx.priority, tmp);
+                    ctx.priority = tmp;
                     ctx.flags |= HAVE_PRIORITY;
                     break ;
                 case 'i':
                     if (++i_argv >= argc || arg[1])
                         return usage(ERR_OPTION+10, &ctx);
-                    if (infile != NULL)
+                    if (ctx.infile != NULL)
                         fprintf(stderr, "warning, overriding previous '-%c %s' with '-%c %s'\n",
-                                *arg, infile, *arg, argv[i_argv]);
-                    infile = argv[i_argv];
+                                *arg, ctx.infile, *arg, argv[i_argv]);
+                    ctx.infile = argv[i_argv];
                     break ;
                 case 'N': ctx.flags |= FILE_NEWIDENTITY; break ;
                 case 'o':
                 case 'O':
                     if (++i_argv >= argc || arg[1])
                         return usage(ERR_OPTION+9, &ctx);
-                    if (outfile != NULL)
+                    if (ctx.outfile != NULL)
                         fprintf(stderr, "warning, overriding previous '-%c %s' with '-%c %s'\n",
-                                (ctx.flags & OUT_APPEND) != 0 ? 'O' : 'o', outfile, *arg, argv[i_argv]);
+                                (ctx.flags & OUT_APPEND) != 0 ? 'O' : 'o', ctx.outfile, *arg, argv[i_argv]);
                     if (*arg == 'O')
                         ctx.flags |= OUT_APPEND;
                     else
                         ctx.flags &= ~OUT_APPEND;
-                    outfile = argv[i_argv];
+                    ctx.outfile = argv[i_argv];
                     break ;
                 case 'u':
                     if (++i_argv >= argc || arg[1])
@@ -538,7 +541,7 @@ int main(int argc, char *const* argv) {
                     && pwfindid_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
                         return clean_ctx(ERR_OPTION+7, &ctx);
                     ctx.flags |= HAVE_UID;
-                    uid = tmpuid;
+                    ctx.uid = tmpuid;
                     break ;
                 case 'U':
                     if (++i_argv >= argc || arg[1])
@@ -559,7 +562,7 @@ int main(int argc, char *const* argv) {
                     && grfindid_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
                         return clean_ctx(ERR_OPTION+3, &ctx);
                     ctx.flags |= HAVE_GID;
-                    gid = tmpgid;
+                    ctx.gid = tmpgid;
                     break ;
                 case 'G':
                     if (++i_argv >= argc || arg[1])
@@ -602,18 +605,18 @@ int main(int argc, char *const* argv) {
         /* program header */
         fprintf(stdout, VERSION_STRING "\n\n");
         /* prepare priority, uid, gid, newargv, outfile, bench for excvp */
-        if ((ctx.flags & HAVE_PRIORITY) != 0 && setpriority(PRIO_PROCESS, getpid(), priority) < 0) {
+        if ((ctx.flags & HAVE_PRIORITY) != 0 && setpriority(PRIO_PROCESS, getpid(), ctx.priority) < 0) {
             ret = ERR_PRIORITY;
-            fprintf(stderr, "setpriority(%d): %s\n", priority, strerror(errno));
+            fprintf(stderr, "setpriority(%d): %s\n", ctx.priority, strerror(errno));
             break ;
         }
-        if ((ctx.flags & FILE_NEWIDENTITY) != 0 && set_uidgid(uid, gid, &ctx) != 0 && ((ret = ERR_SETID) || 1))
+        if ((ctx.flags & FILE_NEWIDENTITY) != 0 && set_uidgid(ctx.uid, ctx.gid, &ctx) != 0 && ((ret = ERR_SETID) || 1))
             break ;
-        if ((ctx.outfd = set_out(outfile, &ctx)) < 0 && ((ret = ERR_SETOUT) || 1))
+        if ((ctx.outfd = set_out(ctx.outfile, &ctx)) < 0 && ((ret = ERR_SETOUT) || 1))
             break ;
-        if ((ctx.infd = set_in(infile, &ctx)) < 0 && ((ret = ERR_SETIN) || 1))
+        if ((ctx.infd = set_in(ctx.infile, &ctx)) < 0 && ((ret = ERR_SETIN) || 1))
             break ;
-        if ((ctx.flags & FILE_NEWIDENTITY) == 0 && set_uidgid(uid, gid, &ctx) != 0 && ((ret = ERR_SETID) || 1))
+        if ((ctx.flags & FILE_NEWIDENTITY) == 0 && set_uidgid(ctx.uid, ctx.gid, &ctx) != 0 && ((ret = ERR_SETID) || 1))
             break ;
         if (do_bench(&ctx) != 0 && ((ret = ERR_BENCH) || 1))
             break ;
