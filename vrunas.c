@@ -292,7 +292,7 @@ static int do_bench(ctx_t * ctx) {
         pid_t           wpid, pid;
         struct timespec ts0;
 
-        if (vclock_gettime(CLOCK_MONOTONIC, &ts0) < 0) {
+        if (vclock_gettime(CLOCK_MONOTONIC_RAW, &ts0) < 0) {
             fprintf(stderr, "bench: vclock_gettime#1 error: %s\n", strerror(errno));
             memset(&ts0, 0, sizeof(ts0));
         }
@@ -326,7 +326,7 @@ static int do_bench(ctx_t * ctx) {
                 perror("waitpid");
 
             /* get timings and other stats */
-            if (vclock_gettime(CLOCK_MONOTONIC, &ts1) < 0) {
+            if (vclock_gettime(CLOCK_MONOTONIC_RAW, &ts1) < 0) {
                 fprintf(stderr, "bench: vclock_gettime#2 error: %s\n", strerror(errno));
                 memset(&ts1, 0, sizeof(ts1));
             }
@@ -539,13 +539,10 @@ int main(int argc, char *const* argv) {
     int             ret = 0;
 
     log_set_vlib_instance(&log);
-    /* Manage program options: first pass on command line to set redirections: nothing has to be written
-     * on stdout/stderr until set_redirections() is called */
-    int fd1 = dup(STDOUT_FILENO);
-    int fd2 = dup(STDERR_FILENO);
-    int fd = open("/dev/null", O_WRONLY);
-    dup2(fd, STDOUT_FILENO);
-    dup2(fd, STDERR_FILENO);
+    /* Manage program options: first pass on command line to set redirections:
+     * nothing has to be written on stdout/stderr until set_redirections() is called */
+    int fd1 = dup(STDOUT_FILENO), fd2 = dup(STDERR_FILENO), fd = open("/dev/null", O_WRONLY);
+    dup2(fd, STDOUT_FILENO); dup2(fd, STDERR_FILENO);
     for ( ; ; ) {
         if (OPT_IS_EXIT(ret = opt_parse_options(&opt_config)) && opt_config.callback != parse_option_first_pass) {
             return clean_ctx(OPT_EXIT_CODE(ret), &ctx);
@@ -553,13 +550,9 @@ int main(int argc, char *const* argv) {
         if (opt_config.callback != parse_option_first_pass)
             break ;
         opt_config.callback = parse_option;
-        /* TODO FIXME */
-        fsync(STDOUT_FILENO);
-        fsync(STDERR_FILENO);
+        /* TODO restore stdout/stderr */
         fflush(NULL);
-        dup2(fd1, STDOUT_FILENO);
-        dup2(fd2, STDERR_FILENO);
-        close(fd);
+        dup2(fd1, STDOUT_FILENO); dup2(fd2, STDERR_FILENO); close(fd);
         /* setup of setout/stderr redirections so that we can use them blindly */
         if (set_redirections(&ctx) != 0) {
             /* see comment inside set_redirections() method. Safest thing is to not display anything
