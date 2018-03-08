@@ -127,7 +127,7 @@ typedef struct {
     uid_t               uid;
     gid_t               gid;
     int                 priority;
-    opt_config_t *      opt_config;     /* FIXME to be removed */
+    int                 i_argv_program;
 } ctx_t;
 
 static int clean_ctx(int ret, ctx_t * ctx) {
@@ -150,11 +150,6 @@ static int clean_ctx(int ret, ctx_t * ctx) {
         }
     }
     return ret;
-}
-
-static int usage(int ret, ctx_t * ctx) { // TODO
-    opt_usage(ret, ctx->opt_config);
-    return clean_ctx(ret, ctx);
 }
 
 int set_uidgid(uid_t uid, gid_t gid, ctx_t * ctx) {
@@ -408,11 +403,128 @@ static int do_bench(ctx_t * ctx) {
     return 0;
 }
 
-/** parse_option() : option callback of type opt_option_callback_t. see vlib/options.h */
+/** parse_option_first_pass() : option callback of type opt_option_callback_t. see vlib/options.h */
 static int parse_option_first_pass(int opt, const char *arg, int *i_argv, const opt_config_t * opt_config) {
+    ctx_t * ctx = opt_config ? (ctx_t *) opt_config->user_data : NULL;
+    (void) arg;
+    (void) i_argv;
+    if (ctx == NULL)
+        return OPT_ERROR(ERR_OPTION);
+    switch (opt) {
+        case 't': ctx->flags |= TIME_POSIX;  break ;
+        case 'T': ctx->flags |= TIME_EXT;    break ;
+        case '1':
+                  if ((ctx->flags & TO_STDERR) != 0)
+                      ctx->flags |= WARN_MOREREDIRS;
+                  ctx->flags = (ctx->flags & ~TO_STDERR) | TO_STDOUT;
+                  break ;
+        case '2':
+                  if ((ctx->flags & TO_STDOUT) != 0)
+                      ctx->flags |= WARN_MOREREDIRS;
+                  ctx->flags = (ctx->flags & ~TO_STDOUT) | TO_STDERR;
+                  break ;
+    }
     return OPT_CONTINUE(0);
 }
+
+/** parse_option_first_pass() : option callback of type opt_option_callback_t. see vlib/options.h */
 static int parse_option(int opt, const char *arg, int *i_argv, const opt_config_t * opt_config) {
+    ctx_t * ctx = opt_config ? (ctx_t *) opt_config->user_data : NULL;
+    (void) arg;
+    (void) i_argv;
+    if (ctx == NULL)
+        return OPT_ERROR(ERR_OPTION);
+    switch (opt) {
+        char *  endptr = NULL;
+        uid_t   tmpuid;
+        gid_t   tmpgid;
+        int     tmp;
+        case 'p':
+            errno = 0;
+            tmp = strtol(arg, &endptr, 0);
+            if (errno != 0 || *endptr != 0) {
+                fprintf(stderr, "error, bad priority '%s'\n", arg);
+                return OPT_ERROR(ERR_OPTION+11);
+            }
+            if ((ctx->flags & HAVE_PRIORITY) != 0)
+                fprintf(stderr, "warning, overriding previous priority '%d' with new value '%d'\n",
+                        ctx->priority, tmp);
+            ctx->priority = tmp;
+            ctx->flags |= HAVE_PRIORITY;
+            break ;
+        case 'i':
+            if (ctx->infile != NULL)
+                fprintf(stderr, "warning, overriding previous '-%c %s' with '-%c %s'\n",
+                        opt, ctx->infile, opt, arg);
+            ctx->infile = arg;
+            break ;
+        case 'N': ctx->flags |= FILE_NEWIDENTITY; break ;
+        case 'o':
+        case 'O':
+            if (ctx->outfile != NULL)
+                fprintf(stderr, "warning, overriding previous '-%c %s' with '-%c %s'\n",
+                        (ctx->flags & OUT_APPEND) != 0 ? 'O' : 'o', ctx->outfile, opt, arg);
+            if (opt == 'O')
+                ctx->flags |= OUT_APPEND;
+            else
+                ctx->flags &= ~OUT_APPEND;
+            ctx->outfile = arg;
+            break ;
+        case 'u':
+            if ((ctx->flags & HAVE_UID) != 0)
+                fprintf(stderr, "warning, overriding previous `-u` parameter with new value `%s`\n", arg);
+            errno = 0;
+            tmpuid = strtol(arg, &endptr, 0);
+            if ((errno != 0 || !endptr || *endptr != 0)
+            &&  pwfindid_r(arg, &tmpuid, &ctx->buf, &ctx->bufsz) != 0)
+                return OPT_ERROR(ERR_OPTION+7);
+            ctx->flags |= HAVE_UID;
+            ctx->uid = tmpuid;
+            break ;
+        case 'U':
+            if (pwfindid_r(arg, &tmpuid, &ctx->buf, &ctx->bufsz) != 0)
+                return OPT_ERROR(ERR_OPTION+5);
+            ctx->flags |= OPTIONAL_ARGS;
+            fprintf(stdout, "%d\n", (int) tmpuid);
+            break ;
+        case 'g':
+            if ((ctx->flags & HAVE_GID) != 0)
+                fprintf(stderr, "warning, overriding previous `-g` parameter with new value `%s`\n", arg);
+            errno = 0;
+            tmpgid = strtol(arg, &endptr, 0);
+            if ((errno != 0 || !endptr || *endptr != 0)
+            &&  grfindid_r(arg, &tmpgid, &ctx->buf, &ctx->bufsz) != 0)
+                return OPT_ERROR(ERR_OPTION+3);
+            ctx->flags |= HAVE_GID;
+            ctx->gid = tmpgid;
+            break ;
+        case 'G':
+            if (grfindid_r(arg, &tmpgid, &ctx->buf, &ctx->bufsz) != 0)
+                return OPT_ERROR(ERR_OPTION+1);
+            ctx->flags |= OPTIONAL_ARGS;
+            fprintf(stdout, "%d\n", (int) tmpgid);
+            break ;
+#       ifdef APP_INCLUDE_SOURCE
+        case 's': {
+            const char *const*const srcs[] = { vrunas_get_source(), vlib_get_source() };
+            for (size_t i = 0; i < (sizeof(srcs) / sizeof(*srcs)); i++)
+                for (const char *const* line = srcs[i]; *line; line++)
+                    fprintf(stdout, "%s", *line);
+            break ;
+        }
+#       endif
+#       ifdef _TEST
+        case 'd': break ;
+#       endif
+        case 'V':
+            fprintf(stdout, "%s\n\nWith:\n  %s\n\n", opt_config->version_string, vlib_get_version());
+            return OPT_EXIT_OK(0);
+        case 'h': return opt_usage(OPT_EXIT_OK(0), opt_config);
+        case OPT_ID_ARG:
+            ctx->i_argv_program = *i_argv;
+            *i_argv = opt_config->argc;
+            break ;
+    }
     return OPT_CONTINUE(0);
 }
 
@@ -420,174 +532,50 @@ int main(int argc, char *const* argv) {
     log_t           log = { .level = LOG_LVL_VERBOSE, .out = stderr, .flags = LOG_FLAG_NONE, .prefix = NULL };
     ctx_t           ctx = {
         .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .alternatefile = NULL, .outfd = -1, .infd = -1, .log = &log,
-        .outfile = NULL, .infile = NULL, .uid = 0, .gid = 0, .priority = 0,
+        .outfile = NULL, .infile = NULL, .uid = 0, .gid = 0, .priority = 0, .i_argv_program = 0,
     };
     opt_config_t    opt_config  = { argc, argv, parse_option_first_pass, s_opt_desc, VERSION_STRING, &ctx };
     char **         newargv = NULL;
-    int             i_argv;
     int             ret = 0;
 
-    /* Manage program options */
     log_set_vlib_instance(&log);
-    ctx.opt_config = &opt_config;
-    /* TODO
-    for ( ; opt_config.callback == parse_option_first_pass; opt_config.callback = parse_option ) {
-        if (OPT_IS_EXIT(ret = opt_parse_options(&opt_config))) {
-            return clean_ctx(OPT_EXIT_CODE(result));
-        }
-    }*/
-
-    /* first pass on command line to set redirections: nothing has to be written
+    /* Manage program options: first pass on command line to set redirections: nothing has to be written
      * on stdout/stderr until set_redirections() is called */
-    for (i_argv = 1; i_argv < argc; i_argv++) {
-        if (argv[i_argv][0] != '-' || (argv[i_argv][1] == '-' && argv[i_argv][2] == 0))
-            break ;
-        for (const char * arg = argv[i_argv] + 1; *arg; arg++) {
-            switch (*arg) {
-                case 'o':case'O':case'i':case'p':case'u':case'U':case'g':case'G':
-                    if (++i_argv >= argc || arg[1]) {
-                        i_argv = argc;
-                        while (arg[1]) arg++;
-                    }
-                    break ;
-                case 't': ctx.flags |= TIME_POSIX;  break ;
-                case 'T': ctx.flags |= TIME_EXT;    break ;
-                case '1':
-                    if ((ctx.flags & TO_STDERR) != 0)
-                        ctx.flags |= WARN_MOREREDIRS;
-                    ctx.flags = (ctx.flags & ~TO_STDERR) | TO_STDOUT;
-                    break ;
-                case '2':
-                    if ((ctx.flags & TO_STDOUT) != 0)
-                        ctx.flags |= WARN_MOREREDIRS;
-                    ctx.flags = (ctx.flags & ~TO_STDOUT) | TO_STDERR;
-                    break ;
-            }
+    int fd1 = dup(STDOUT_FILENO);
+    int fd2 = dup(STDERR_FILENO);
+    int fd = open("/dev/null", O_WRONLY);
+    dup2(fd, STDOUT_FILENO);
+    dup2(fd, STDERR_FILENO);
+    for ( ; ; ) {
+        if (OPT_IS_EXIT(ret = opt_parse_options(&opt_config)) && opt_config.callback != parse_option_first_pass) {
+            return clean_ctx(OPT_EXIT_CODE(ret), &ctx);
         }
-    }
-    /* setup of setout/stderr redirections so that we can use them blindly */
-    if (set_redirections(&ctx) != 0) {
-        /* see comment inside set_redirections() method. Safest thing is to not display anything
-         * on error. Error here is rare, but... TODO */
-        fprintf((ctx.flags & (TIME_POSIX | TIME_EXT)) == 0 ? stderr
-                     : (ctx.flags & TO_STDERR) != 0 ? stdout : stderr,
-                "set_redirections(dup|dup2|open): %s\n", strerror(errno));
-        exit(clean_ctx(ERR_REDIR, &ctx));
-    }
-    if ((ctx.flags & WARN_MOREREDIRS) != 0) {
-        fprintf(stderr, "warning, conflicting '-1' and '-2' options, taking the last one: '%s'\n",
-                (ctx.flags & TO_STDERR) != 0 ? "-2" : "-1");
-    }
-    /* second pass on command line */
-    for (i_argv = 1; i_argv < argc; i_argv++) {
-        if (argv[i_argv][0] != '-' || (argv[i_argv][1] == '-' && argv[i_argv][2] == 0 && ++i_argv))
+        if (opt_config.callback != parse_option_first_pass)
             break ;
-        for (const char * arg = argv[i_argv] + 1; *arg; arg++) {
-            switch (*arg) {
-                char *  endptr = NULL;
-                uid_t   tmpuid;
-                gid_t   tmpgid;
-                int     tmp;
-                case '1':
-                case '2':
-                case 't':
-                case 'T':
-                    break ; /* treated in the first pass */
-                case 'p':
-                    if (++i_argv >= argc || arg[1])
-                        return usage(ERR_OPTION+12, &ctx);
-                    errno = 0;
-                    tmp = strtol(argv[i_argv], &endptr, 0);
-                    if (errno != 0 || *endptr != 0) {
-                        fprintf(stderr, "error, bad priority '%s'\n", argv[i_argv]);
-                        return clean_ctx(ERR_OPTION+11, &ctx);
-                    }
-                    if ((ctx.flags & HAVE_PRIORITY) != 0)
-                        fprintf(stderr, "warning, overriding previous priority '%d' with new value '%d'\n",
-                                ctx.priority, tmp);
-                    ctx.priority = tmp;
-                    ctx.flags |= HAVE_PRIORITY;
-                    break ;
-                case 'i':
-                    if (++i_argv >= argc || arg[1])
-                        return usage(ERR_OPTION+10, &ctx);
-                    if (ctx.infile != NULL)
-                        fprintf(stderr, "warning, overriding previous '-%c %s' with '-%c %s'\n",
-                                *arg, ctx.infile, *arg, argv[i_argv]);
-                    ctx.infile = argv[i_argv];
-                    break ;
-                case 'N': ctx.flags |= FILE_NEWIDENTITY; break ;
-                case 'o':
-                case 'O':
-                    if (++i_argv >= argc || arg[1])
-                        return usage(ERR_OPTION+9, &ctx);
-                    if (ctx.outfile != NULL)
-                        fprintf(stderr, "warning, overriding previous '-%c %s' with '-%c %s'\n",
-                                (ctx.flags & OUT_APPEND) != 0 ? 'O' : 'o', ctx.outfile, *arg, argv[i_argv]);
-                    if (*arg == 'O')
-                        ctx.flags |= OUT_APPEND;
-                    else
-                        ctx.flags &= ~OUT_APPEND;
-                    ctx.outfile = argv[i_argv];
-                    break ;
-                case 'u':
-                    if (++i_argv >= argc || arg[1])
-                        return usage(ERR_OPTION+8, &ctx);
-                    if ((ctx.flags & HAVE_UID) != 0)
-                        fprintf(stderr, "warning, overriding previous `-u` parameter with new value `%s`\n", argv[i_argv]);
-                    errno = 0;
-                    tmpuid = strtol(argv[i_argv], &endptr, 0);
-                    if ((errno != 0 || !endptr || *endptr != 0)
-                    && pwfindid_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
-                        return clean_ctx(ERR_OPTION+7, &ctx);
-                    ctx.flags |= HAVE_UID;
-                    ctx.uid = tmpuid;
-                    break ;
-                case 'U':
-                    if (++i_argv >= argc || arg[1])
-                        return usage(ERR_OPTION+6, &ctx);
-                    if (pwfindid_r(argv[i_argv], &tmpuid, &ctx.buf, &ctx.bufsz) != 0)
-                        return clean_ctx(ERR_OPTION+5, &ctx);
-                    ctx.flags |= OPTIONAL_ARGS;
-                    fprintf(stdout, "%d\n", (int) tmpuid);
-                    break ;
-                case 'g':
-                    if (++i_argv >= argc || arg[1])
-                        return usage(ERR_OPTION+4, &ctx);
-                    if ((ctx.flags & HAVE_GID) != 0)
-                        fprintf(stderr, "warning, overriding previous `-g` parameter with new value `%s`\n", argv[i_argv]);
-                    errno = 0;
-                    tmpgid = strtol(argv[i_argv], &endptr, 0);
-                    if ((errno != 0 || !endptr || *endptr != 0)
-                    && grfindid_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
-                        return clean_ctx(ERR_OPTION+3, &ctx);
-                    ctx.flags |= HAVE_GID;
-                    ctx.gid = tmpgid;
-                    break ;
-                case 'G':
-                    if (++i_argv >= argc || arg[1])
-                        return usage(ERR_OPTION+2, &ctx);
-                    if (grfindid_r(argv[i_argv], &tmpgid, &ctx.buf, &ctx.bufsz) != 0)
-                        return clean_ctx(ERR_OPTION+1, &ctx);
-                    ctx.flags |= OPTIONAL_ARGS;
-                    fprintf(stdout, "%d\n", (int) tmpgid);
-                    break ;
-#                   ifdef APP_INCLUDE_SOURCE
-                case 's':
-                    for (const char *const* line = vrunas_get_source(); *line; line++)
-                        fprintf(stdout, "%s", *line);
-                    break ;
-#                   endif
-#                   ifdef _TEST
-                case 'd': break ;
-#                   endif
-                case 'h': return usage(0, &ctx);
-                default:
-                    fprintf(stderr, "unknown option '-%c'\n", *arg);
-                    return usage(ERR_OPTION, &ctx);
-            }
+        opt_config.callback = parse_option;
+        /* TODO FIXME */
+        fsync(STDOUT_FILENO);
+        fsync(STDERR_FILENO);
+        fflush(NULL);
+        dup2(fd1, STDOUT_FILENO);
+        dup2(fd2, STDERR_FILENO);
+        close(fd);
+        /* setup of setout/stderr redirections so that we can use them blindly */
+        if (set_redirections(&ctx) != 0) {
+            /* see comment inside set_redirections() method. Safest thing is to not display anything
+             * on error. Error here is rare, but... TODO */
+            fprintf((ctx.flags & (TIME_POSIX | TIME_EXT)) == 0 ? stderr
+                         : (ctx.flags & TO_STDERR) != 0 ? stdout : stderr,
+                    "set_redirections(dup|dup2|open): %s\n", strerror(errno));
+            exit(clean_ctx(ERR_REDIR, &ctx));
         }
+        if ((ctx.flags & WARN_MOREREDIRS) != 0) {
+            fprintf(stderr, "warning, conflicting '-1' and '-2' options, taking the last one: '%s'\n",
+                    (ctx.flags & TO_STDERR) != 0 ? "-2" : "-1");
+        }
+        /* loop for the second pass on command line */
     }
+
     /* clean now unnecessary resources */
     if (ctx.buf) {
         free(ctx.buf);
@@ -595,11 +583,11 @@ int main(int argc, char *const* argv) {
     }
     do {
         /* error if program is mandatory */
-        if (i_argv >= argc) {
+        if (ctx.i_argv_program == 0 || ctx.i_argv_program >= argc) {
             if ((ctx.flags & OPTIONAL_ARGS) != 0 && ((ret = 0) || 1))
                 break ;
             fprintf(stderr, "error: missing program\n");
-            ret = usage(ERR_PROG_MISSING, &ctx);
+            ret = opt_usage(OPT_ERROR(ERR_PROG_MISSING), &opt_config);
             break ;
         }
         /* program header */
@@ -620,7 +608,7 @@ int main(int argc, char *const* argv) {
             break ;
         if (do_bench(&ctx) != 0 && ((ret = ERR_BENCH) || 1))
             break ;
-        if ((newargv = build_argv(argc - i_argv, argv + i_argv, &ctx)) == NULL && ((ret = ERR_BUILDARGV) || 1))
+        if ((newargv = build_argv(argc - ctx.i_argv_program, argv + ctx.i_argv_program, &ctx)) == NULL && ((ret = ERR_BUILDARGV) || 1))
             break ;
         /* execvp, in, if needed, a forked process */
         if (execvp(*newargv, newargv) < 0) {
