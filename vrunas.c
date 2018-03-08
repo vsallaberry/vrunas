@@ -427,7 +427,7 @@ static int parse_option_first_pass(int opt, const char *arg, int *i_argv, const 
     return OPT_CONTINUE(0);
 }
 
-/** parse_option_first_pass() : option callback of type opt_option_callback_t. see vlib/options.h */
+/** parse_option() : option callback of type opt_option_callback_t. see vlib/options.h */
 static int parse_option(int opt, const char *arg, int *i_argv, const opt_config_t * opt_config) {
     ctx_t * ctx = opt_config ? (ctx_t *) opt_config->user_data : NULL;
     (void) arg;
