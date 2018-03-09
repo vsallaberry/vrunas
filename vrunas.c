@@ -308,7 +308,6 @@ static int do_bench(ctx_t * ctx) {
             struct          rusage rusage;
             FILE *          out = ctx->alternatefile;
             int             status;
-            struct timeval  tv0, tv1;
             struct timespec ts1;
             int     sigs[] = { SIGINT, SIGHUP, SIGTERM, SIGQUIT, SIGUSR1, SIGUSR1, SIGPIPE };
             struct sigaction sa = { .sa_handler = sig_handler, .sa_flags = SA_RESTART };
@@ -330,18 +329,14 @@ static int do_bench(ctx_t * ctx) {
                 fprintf(stderr, "bench: vclock_gettime#2 error: %s\n", strerror(errno));
                 memset(&ts1, 0, sizeof(ts1));
             }
-            tv0.tv_sec = ts0.tv_sec;
-            tv0.tv_usec = ts0.tv_nsec / 1000;
-            tv1.tv_sec = ts1.tv_sec;
-            tv1.tv_usec = ts1.tv_nsec / 1000;
-            timersub(&tv1, &tv0, &tv1);
+            vtimespecsub(&ts1, &ts0, &ts1);
 
             if (getrusage(RUSAGE_CHILDREN, &rusage) < 0)
                 perror("getrusage");
 
             if ((ctx->flags & TIME_POSIX) != 0) {
                 fprintf(out, "real %ld.%02d\nuser %ld.%02d\nsys %ld.%02d\n",
-                        (long)tv1.tv_sec, (int)(tv1.tv_usec / 10000),
+                        (long)ts1.tv_sec, (int)(ts1.tv_nsec / 10000000),
                         (long)rusage.ru_utime.tv_sec, (int)(rusage.ru_utime.tv_usec / 10000),
                         (long)rusage.ru_stime.tv_sec, (int)(rusage.ru_stime.tv_usec / 10000));
             }
@@ -349,35 +344,35 @@ static int do_bench(ctx_t * ctx) {
             if ((ctx->flags & TIME_EXT) != 0) {
                 /* ru_utime     the total amount of time spent executing in user mode.
                    ru_stime     the total amount of time spent in the system executing on behalf of the process(es). */
-                fprintf(out, "realtime % 3ld.%06d (the real time in seconds spent by process with usec precision)\n"
-                             "maxrss   % 10ld (the maximum resident set size utilized (in bytes).)\n"
-                             "ixrss    % 10ld (an integral value indicating the amount of memory used "
+                fprintf(out, "realtime % 3ld.%09d (the real time in seconds spent by process with nsec precision)\n"
+                             "maxrss   % 13ld (the maximum resident set size utilized (in bytes).)\n"
+                             "ixrss    % 13ld (an integral value indicating the amount of memory used "
                                               "by the text segment that was also shared among other "
                                               "processes. This value is expressed in units of "
                                               "kilobytes * ticks-of-execution.)\n"
-                             "idrss    % 10ld (an integral value of the amount of unshared memory residing "
+                             "idrss    % 13ld (an integral value of the amount of unshared memory residing "
                                               "in the data segment of a process (expressed in units of "
                                               "kilobytes * ticks-of-execution).\n"
-                             "isrss    % 10ld (an integral value of the amount of unshared memory residing "
+                             "isrss    % 13ld (an integral value of the amount of unshared memory residing "
                                               "in the stack segment of a process (expressed in units of "
                                               "kilobytes * ticks-of-execution).)\n"
-                             "minflt   % 10ld (the number of page faults serviced without any I/O activity; "
+                             "minflt   % 13ld (the number of page faults serviced without any I/O activity; "
                                               "here I/O activity is avoided by reclaiming a page frame from "
                                               "the list of pages awaiting reallocation.)\n"
-                             "majflt   % 10ld (the number of page faults serviced that required I/O activity.)\n"
-                             "nswap    % 10ld (the number of times a process was swapped out of main memory.)\n"
-                             "inblock  % 10ld (the number of times the file system had to perform input.)\n"
-                             "oublock  % 10ld (the number of times the file system had to perform output.)\n"
-                             "msgsnd   % 10ld (the number of IPC messages sent.)\n"
-                             "msgrcv   % 10ld (the number of IPC messages received.)\n"
-                             "nsignals % 10ld (the number of signals delivered.)\n"
-                             "ncvsw    % 10ld (the number of times a context switch resulted due to a process "
+                             "majflt   % 13ld (the number of page faults serviced that required I/O activity.)\n"
+                             "nswap    % 13ld (the number of times a process was swapped out of main memory.)\n"
+                             "inblock  % 13ld (the number of times the file system had to perform input.)\n"
+                             "oublock  % 13ld (the number of times the file system had to perform output.)\n"
+                             "msgsnd   % 13ld (the number of IPC messages sent.)\n"
+                             "msgrcv   % 13ld (the number of IPC messages received.)\n"
+                             "nsignals % 13ld (the number of signals delivered.)\n"
+                             "ncvsw    % 13ld (the number of times a context switch resulted due to a process "
                                               "voluntarily giving up the processor before its time slice was "
                                               "completed (usually to await availability of a resource).)\n"
-                             "nivcsw   % 10ld (the number of times a context switch resulted due to a higher "
+                             "nivcsw   % 13ld (the number of times a context switch resulted due to a higher "
                                               "priority process becoming runnable or because the current "
                                               "process exceeded its time slice.)\n",
-                        (long) tv1.tv_sec, (int) tv1.tv_usec,
+                        (long) ts1.tv_sec, (int) ts1.tv_nsec / 1000,
                         rusage.ru_maxrss, rusage.ru_ixrss, rusage.ru_idrss, rusage.ru_isrss,
                         rusage.ru_minflt, rusage.ru_majflt,
                         rusage.ru_nswap,
