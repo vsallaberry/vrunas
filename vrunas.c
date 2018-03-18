@@ -529,7 +529,7 @@ int main(int argc, char *const* argv) {
         .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .alternatefile = NULL, .outfd = -1, .infd = -1, .log = &log,
         .outfile = NULL, .infile = NULL, .uid = 0, .gid = 0, .priority = 0, .i_argv_program = 0,
     };
-    opt_config_t    opt_config  = { argc, argv, parse_option_first_pass, s_opt_desc, VERSION_STRING, &ctx, OPT_FLAG_SILENT };
+    opt_config_t    opt_config  = { argc, argv, parse_option_first_pass, s_opt_desc, OPT_FLAG_SILENT, VERSION_STRING, &ctx };
     char **         newargv = NULL;
     int             ret = 0;
 
