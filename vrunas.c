@@ -529,15 +529,13 @@ int main(int argc, char *const* argv) {
         .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .alternatefile = NULL, .outfd = -1, .infd = -1, .log = &log,
         .outfile = NULL, .infile = NULL, .uid = 0, .gid = 0, .priority = 0, .i_argv_program = 0,
     };
-    opt_config_t    opt_config  = { argc, argv, parse_option_first_pass, s_opt_desc, VERSION_STRING, &ctx };
+    opt_config_t    opt_config  = { argc, argv, parse_option_first_pass, s_opt_desc, VERSION_STRING, &ctx, OPT_FLAG_SILENT };
     char **         newargv = NULL;
     int             ret = 0;
 
     log_set_vlib_instance(&log);
-    /* Manage program options: first pass on command line to set redirections:
+    /* Manage program options: first pass on command line to set redirections, in silent mode:
      * nothing has to be written on stdout/stderr until set_redirections() is called */
-    int fd1 = dup(STDOUT_FILENO), fd2 = dup(STDERR_FILENO), fd = open("/dev/null", O_WRONLY);
-    dup2(fd, STDOUT_FILENO); dup2(fd, STDERR_FILENO);
     for ( ; ; ) {
         if (OPT_IS_EXIT(ret = opt_parse_options(&opt_config)) && opt_config.callback != parse_option_first_pass) {
             return clean_ctx(OPT_EXIT_CODE(ret), &ctx);
@@ -545,9 +543,7 @@ int main(int argc, char *const* argv) {
         if (opt_config.callback != parse_option_first_pass)
             break ;
         opt_config.callback = parse_option;
-        /* TODO restore stdout/stderr */
-        fflush(NULL);
-        dup2(fd1, STDOUT_FILENO); dup2(fd2, STDERR_FILENO); close(fd);
+        opt_config.flags &= ~OPT_FLAG_SILENT;
         /* setup of setout/stderr redirections so that we can use them blindly */
         if (set_redirections(&ctx) != 0) {
             /* see comment inside set_redirections() method. Safest thing is to not display anything
