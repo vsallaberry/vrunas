@@ -47,6 +47,7 @@
                                     "git:" BUILD_GITREV, "Vincent Sallaberry", "2018")
 
 static const opt_options_desc_t s_opt_desc[] = {
+    { OPT_ID_SECTION, NULL, "options", "Options:" },
 #   ifdef APP_INCLUDE_SOURCE
     { 's', "source",        NULL,           "show source code" },
 #   endif
@@ -57,9 +58,9 @@ static const opt_options_desc_t s_opt_desc[] = {
     { '1', "to-stdout",     NULL,           "redirect program stderr to stdout" },
     { '2', "to-stderr",     NULL,           "redirect program stdout to stderr" },
         /* "  -1|-2        : redirect program stderr or stdout to respectively stdout(-1) or stderr(-2)" */
-    { 't', "time",          NULL,           "print timings of program ('time -p' POSIX format)\n"
-                                            "With -1: timings will be printed to stderr.\n"
-                                            "With -2: to stdout, otherwise, to stderr. To put timings in "
+    { 't', "time",          NULL,           "print timings of program ('time -p' POSIX format). "
+                                            "With -1: timings will be printed to stderr, "
+                                            "With -2: to stdout, otherwise, to stderr.\nTo put timings in "
                                             "variable and display command: '$ t=`vrunas -2 -t ls -R /`'" },
     { 'T', "time-extended", NULL,           "same as -t/--time but with extended format." },
         /* "  -t|-T        : print timings of program (-t:'time -p' POSIX, -T:extended)\n"
@@ -79,6 +80,8 @@ static const opt_options_desc_t s_opt_desc[] = {
 #   endif
     { 'V', "version",       NULL,           "version" },
     { 'h', "help",          NULL,           "help" },
+    { OPT_ID_SECTION, NULL, "arguments", "\nArguments:" },
+    { OPT_ID_ARG, NULL, "[program [arguments]]", "program and arguments, required unless -U/-G is given" },
     { 0, NULL, NULL, NULL }
 };
 
@@ -514,7 +517,7 @@ static int parse_option(int opt, const char *arg, int *i_argv, const opt_config_
         case 'V':
             fprintf(stdout, "%s\n\nWith:\n  %s\n\n", opt_config->version_string, vlib_get_version());
             return OPT_EXIT_OK(0);
-        case 'h': return opt_usage(OPT_EXIT_OK(0), opt_config);
+        case 'h': return opt_usage(OPT_EXIT_OK(0), opt_config, NULL);
         case OPT_ID_ARG:
             ctx->i_argv_program = *i_argv;
             *i_argv = opt_config->argc;
@@ -571,7 +574,7 @@ int main(int argc, char *const* argv) {
             if ((ctx.flags & OPTIONAL_ARGS) != 0 && ((ret = 0) || 1))
                 break ;
             fprintf(stderr, "error: missing program\n");
-            ret = opt_usage(OPT_ERROR(ERR_PROG_MISSING), &opt_config);
+            ret = opt_usage(OPT_ERROR(ERR_PROG_MISSING), &opt_config, NULL);
             break ;
         }
         /* program header */
