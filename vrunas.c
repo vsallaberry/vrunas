@@ -48,6 +48,8 @@
 
 static const opt_options_desc_t s_opt_desc[] = {
     { OPT_ID_SECTION, NULL, "options", "Options:" },
+    { 'h', "help",          "[filter[,...]]","show help - " },
+    { 'V', "version",       NULL,           "show version" },
 #   ifdef APP_INCLUDE_SOURCE
     { 's', "source",        NULL,           "show source code" },
 #   endif
@@ -78,8 +80,6 @@ static const opt_options_desc_t s_opt_desc[] = {
 #   ifdef _TEST
     /* nothing */
 #   endif
-    { 'V', "version",       NULL,           "version" },
-    { 'h', "help",          NULL,           "help" },
     { OPT_ID_SECTION, NULL, "arguments", "\nArguments:" },
     { OPT_ID_ARG, NULL, "[program [arguments]]", "program and arguments, required unless -U/-G is given" },
     { 0, NULL, NULL, NULL }
@@ -432,6 +432,13 @@ static int parse_option(int opt, const char *arg, int *i_argv, const opt_config_
     (void) i_argv;
     if (ctx == NULL)
         return OPT_ERROR(ERR_OPTION);
+    if ((opt & OPT_DESCRIBE_OPTION) != 0) {
+        switch(opt & OPT_OPTION_FLAG_MASK) {
+            case 'h':
+                return opt_describe_filter(opt, arg, i_argv, opt_config);
+        }
+        return OPT_EXIT_OK(0);
+    }
     switch (opt) {
         char *  endptr = NULL;
         uid_t   tmpuid;
@@ -517,7 +524,7 @@ static int parse_option(int opt, const char *arg, int *i_argv, const opt_config_
         case 'V':
             fprintf(stdout, "%s\n\nWith:\n  %s\n\n", opt_config->version_string, vlib_get_version());
             return OPT_EXIT_OK(0);
-        case 'h': return opt_usage(OPT_EXIT_OK(0), opt_config, NULL);
+        case 'h': return opt_usage(OPT_EXIT_OK(0), opt_config, arg);
         case OPT_ID_ARG:
             ctx->i_argv_program = *i_argv;
             *i_argv = opt_config->argc;
