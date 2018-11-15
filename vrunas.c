@@ -82,7 +82,7 @@ static const opt_options_desc_t s_opt_desc[] = {
 #   endif
     { OPT_ID_SECTION, NULL, "arguments", "\nArguments:" },
     { OPT_ID_ARG, NULL, "[program [arguments]]", "program and arguments, required unless -U/-G is given" },
-    { 0, NULL, NULL, NULL }
+    { OPT_ID_END, NULL, NULL, NULL }
 };
 
 enum FLAGS {
@@ -539,7 +539,7 @@ int main(int argc, char *const* argv) {
         .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .alternatefile = NULL, .outfd = -1, .infd = -1, .log = &log,
         .outfile = NULL, .infile = NULL, .uid = 0, .gid = 0, .priority = 0, .i_argv_program = 0,
     };
-    opt_config_t    opt_config  = { argc, argv, parse_option_first_pass, s_opt_desc, OPT_FLAG_SILENT, VERSION_STRING, &ctx };
+    opt_config_t    opt_config  = { argc, argv, parse_option_first_pass, s_opt_desc, OPT_FLAG_SILENT, VERSION_STRING, &ctx, NULL };
     char **         newargv = NULL;
     int             ret = 0;
 
