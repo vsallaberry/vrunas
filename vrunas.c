@@ -312,7 +312,7 @@ static int do_bench(ctx_t * ctx) {
             FILE *          out = ctx->alternatefile;
             int             status;
             struct timespec ts1;
-            int     sigs[] = { SIGINT, SIGHUP, SIGTERM, SIGQUIT, SIGUSR1, SIGUSR1, SIGPIPE };
+            int     sigs[] = { SIGINT, SIGHUP, SIGTERM, SIGQUIT, SIGUSR1, SIGUSR2, SIGPIPE };
             struct sigaction sa = { .sa_handler = sig_handler, .sa_flags = SA_RESTART };
 
             /* install signal handler and give to him the program pid */
@@ -421,6 +421,9 @@ static int parse_option_first_pass(int opt, const char *arg, int *i_argv, const 
                       ctx->flags |= WARN_MOREREDIRS;
                   ctx->flags = (ctx->flags & ~TO_STDOUT) | TO_STDERR;
                   break ;
+        case OPT_ID_ARG:
+            *i_argv = opt_config->argc;
+            break ;
     }
     return OPT_CONTINUE(0);
 }
