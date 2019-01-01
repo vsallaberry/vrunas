@@ -82,7 +82,7 @@ ARCH_RELEASE	= -march=native # -arch i386 -arch x86_64
 OPTI_COMMON	= -pipe -fstack-protector
 OPTI_RELEASE	= -O3 $(OPTI_COMMON) $(sys_OPTI)
 INCS_RELEASE	= $(sys_INCS)
-LIBS_RELEASE	= $(SUBLIBS) $(sys_LIBS) -lpthread
+LIBS_RELEASE	= $(SUBLIBS) $(sys_LIBS) -lpthread -lz
 MACROS_RELEASE	=
 WARN_DEBUG	= $(WARN_RELEASE) # -Werror
 ARCH_DEBUG	= $(ARCH_RELEASE)

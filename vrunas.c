@@ -513,13 +513,10 @@ static int parse_option(int opt, const char *arg, int *i_argv, const opt_config_
             fprintf(stdout, "%d\n", (int) tmpgid);
             break ;
 #       ifdef APP_INCLUDE_SOURCE
-        case 's': {
-            const char *const*const srcs[] = { vrunas_get_source(), vlib_get_source() };
-            for (size_t i = 0; i < (sizeof(srcs) / sizeof(*srcs)); i++)
-                for (const char *const* line = srcs[i]; *line; line++)
-                    fprintf(stdout, "%s", *line);
-            break ;
-        }
+        case 's':
+           vrunas_get_source(stdout, NULL, 0, NULL);
+           vlib_get_source(stdout, NULL, 0, NULL);
+           break ;
 #       endif
 #       ifdef _TEST
         case 'd': break ;
