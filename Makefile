@@ -1,8 +1,8 @@
 #
-# Copyright (C) 2018 Vincent Sallaberry
+# Copyright (C) 2018-2019 Vincent Sallaberry
 # vrunas <https://github.com/vsallaberry/vrunas>
 #
-#   from vlib Makefile Copyright (C) 2017-2018 Vincent Sallaberry
+#   from vlib Makefile Copyright (C) 2017-2019 Vincent Sallaberry
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by

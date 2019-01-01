@@ -51,5 +51,5 @@ bsd make can stop. Just type again '$ make' and it will be fine.
 ## License
 GPLv3 or later. See LICENSE file.
 
-CopyRight: Copyright (C) 2018 Vincent Sallaberry
+CopyRight: Copyright (C) 2018-2019 Vincent Sallaberry
 
