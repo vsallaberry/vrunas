@@ -44,7 +44,7 @@
 #include "vlib/log.h"
 
 #define VERSION_STRING OPT_VERSION_STRING_GPL3PLUS(BUILD_APPNAME, APP_VERSION, \
-                                    "git:" BUILD_GITREV, "Vincent Sallaberry", "2018")
+                                    "git:" BUILD_GITREV, "Vincent Sallaberry", "2018-2019")
 
 static const opt_options_desc_t s_opt_desc[] = {
     { OPT_ID_SECTION, NULL, "options", "Options:" },
