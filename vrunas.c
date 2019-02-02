@@ -42,6 +42,7 @@
 #include "vlib/time.h"
 #include "vlib/account.h"
 #include "vlib/log.h"
+#include "vlib/util.h"
 
 #define VERSION_STRING OPT_VERSION_STRING_GPL3PLUS(BUILD_APPNAME, APP_VERSION, \
                                     "git:" BUILD_GITREV, "Vincent Sallaberry", "2018-2019")
@@ -50,9 +51,7 @@ static const opt_options_desc_t s_opt_desc[] = {
     { OPT_ID_SECTION, NULL, "options", "Options:" },
     { 'h', "help",          "[filter[,...]]","show help - " },
     { 'V', "version",       NULL,           "show version" },
-#   ifdef APP_INCLUDE_SOURCE
     { 's', "source",        NULL,           "show source code" },
-#   endif
     { 'u', "user",          "uid|user",     "change uid" },
     { 'g', "group",         "gid|group",    "change gid" },
     { 'U', "print-uid",     "user",         "print uid of user, no program and arguments required." },
@@ -512,12 +511,10 @@ static int parse_option(int opt, const char *arg, int *i_argv, const opt_config_
             ctx->flags |= OPTIONAL_ARGS;
             fprintf(stdout, "%d\n", (int) tmpgid);
             break ;
-#       ifdef APP_INCLUDE_SOURCE
         case 's':
            vrunas_get_source(stdout, NULL, 0, NULL);
            vlib_get_source(stdout, NULL, 0, NULL);
            break ;
-#       endif
 #       ifdef _TEST
         case 'd': break ;
 #       endif
@@ -617,4 +614,13 @@ int main(int argc, char *const* argv) {
         free(newargv);
     return clean_ctx(ret, &ctx);
 }
+
+#ifndef APP_INCLUDE_SOURCE
+# define APP_NO_SOURCE_STRING "\n/* #@@# FILE #@@# " BUILD_APPNAME "/* */\n" \
+                              BUILD_APPNAME " source not included in this build.\n"
+int vrunas_get_source(FILE * out, char * buffer, unsigned int buffer_size, void ** ctx) {
+    return vdecode_buffer(out, buffer, buffer_size, ctx,
+           APP_NO_SOURCE_STRING, sizeof(APP_NO_SOURCE_STRING) - 1);
+}
+#endif
 
