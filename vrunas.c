@@ -42,6 +42,7 @@
 #include "vlib/time.h"
 #include "vlib/account.h"
 #include "vlib/log.h"
+#include "vlib/logpool.h"
 #include "vlib/util.h"
 
 #define VERSION_STRING OPT_VERSION_STRING_GPL3PLUS(BUILD_APPNAME, APP_VERSION, \
@@ -52,6 +53,8 @@ static const opt_options_desc_t s_opt_desc[] = {
     { 'h', "help",          "[filter[,...]]","show help - " },
     { 'V', "version",       NULL,           "show version" },
     { 's', "source",        NULL,           "show source code" },
+    { 'l', "log-level", "level",            "Set log level "
+                                            "[module1=]level1[@file1][:flag1[|flag2]][,...]." },
     { 'u', "user",          "uid|user",     "change uid" },
     { 'g', "group",         "gid|group",    "change gid" },
     { 'U', "print-uid",     "user",         "print uid of user, no program and arguments required." },
@@ -115,7 +118,7 @@ enum {
 };
 
 typedef struct {
-    log_t *             log;
+    logpool_t *         logs;
     int                 flags;
     int                 argc;
     char *const*        argv;
@@ -134,6 +137,9 @@ typedef struct {
 
 static int clean_ctx(int ret, ctx_t * ctx) {
     if (ctx) {
+        if (ctx->logs != NULL) {
+            logpool_free(ctx->logs);
+        }
         if (ctx->buf) {
             free(ctx->buf);
             ctx->buf = NULL;
@@ -403,7 +409,7 @@ static int do_bench(ctx_t * ctx) {
 /** parse_option_first_pass() : option callback of type opt_option_callback_t. see vlib/options.h */
 static int parse_option_first_pass(int opt, const char *arg, int *i_argv, const opt_config_t * opt_config) {
     ctx_t * ctx = opt_config ? (ctx_t *) opt_config->user_data : NULL;
-    (void) arg;
+    log_t * log;
     (void) i_argv;
     if (ctx == NULL)
         return OPT_ERROR(ERR_OPTION);
@@ -411,15 +417,42 @@ static int parse_option_first_pass(int opt, const char *arg, int *i_argv, const 
         case 't': ctx->flags |= TIME_POSIX;  break ;
         case 'T': ctx->flags |= TIME_EXT;    break ;
         case '1':
-                  if ((ctx->flags & TO_STDERR) != 0)
-                      ctx->flags |= WARN_MOREREDIRS;
-                  ctx->flags = (ctx->flags & ~TO_STDERR) | TO_STDOUT;
-                  break ;
+            if ((ctx->flags & TO_STDERR) != 0)
+                ctx->flags |= WARN_MOREREDIRS;
+            ctx->flags = (ctx->flags & ~TO_STDERR) | TO_STDOUT;
+            break ;
         case '2':
-                  if ((ctx->flags & TO_STDOUT) != 0)
-                      ctx->flags |= WARN_MOREREDIRS;
-                  ctx->flags = (ctx->flags & ~TO_STDOUT) | TO_STDERR;
-                  break ;
+            if ((ctx->flags & TO_STDOUT) != 0)
+                ctx->flags |= WARN_MOREREDIRS;
+                ctx->flags = (ctx->flags & ~TO_STDOUT) | TO_STDERR;
+            break ;
+        case 'l':
+            if ((ctx->logs = logpool_create_from_cmdline(ctx->logs, arg, NULL)) == NULL)
+                return OPT_ERROR(OPT_EBADARG);
+            break ;
+        case OPT_ID_END:
+            if ((log = logpool_getlog(ctx->logs, "vlib", LPG_NODEFAULT)) != NULL) {
+                log_set_vlib_instance(log);
+            } else {
+                 log_t vlog = { .level = LOG_LVL_VERBOSE, .out = stderr, .flags = LOG_FLAG_NONE, .prefix = NULL };
+                 log_set_vlib_instance(logpool_add(ctx->logs, &vlog, NULL));
+            }
+            ((opt_config_t *) opt_config)->log  //FIXME cast
+                = logpool_getlog(ctx->logs, "options", LPG_NODEFAULT);
+            /* setup of setout/stderr redirections so that we can use them blindly */
+            if (set_redirections(ctx) != 0) {
+                /* see comment inside set_redirections() method. Safest thing is to not display anything
+                 * on error. Error here is rare, but... TODO */
+                fprintf((ctx->flags & (TIME_POSIX | TIME_EXT)) == 0
+                        ? stderr : (ctx->flags & TO_STDERR) != 0 ? stdout : stderr,
+                        "set_redirections(dup|dup2|open): %s\n", strerror(errno));
+                exit(clean_ctx(ERR_REDIR, ctx));
+            }
+            if ((ctx->flags & WARN_MOREREDIRS) != 0) {
+                fprintf(stderr, "warning, conflicting '-1' and '-2' options, taking the last one: '%s'\n",
+                        (ctx->flags & TO_STDERR) != 0 ? "-2" : "-1");
+            }
+            break ;
         case OPT_ID_ARG:
             *i_argv = opt_config->argc;
             break ;
@@ -429,15 +462,19 @@ static int parse_option_first_pass(int opt, const char *arg, int *i_argv, const 
 
 /** parse_option() : option callback of type opt_option_callback_t. see vlib/options.h */
 static int parse_option(int opt, const char *arg, int *i_argv, const opt_config_t * opt_config) {
-    ctx_t * ctx = opt_config ? (ctx_t *) opt_config->user_data : NULL;
+    const char * const  modules[]   = { "vlib", "options", "*", NULL };
+    ctx_t *             ctx         = opt_config ? (ctx_t *) opt_config->user_data : NULL;
     (void) arg;
     (void) i_argv;
+
     if (ctx == NULL)
         return OPT_ERROR(ERR_OPTION);
     if ((opt & OPT_DESCRIBE_OPTION) != 0) {
         switch(opt & OPT_OPTION_FLAG_MASK) {
             case 'h':
                 return opt_describe_filter(opt, arg, i_argv, opt_config);
+            case 'l':
+                return log_describe_option((char *)arg, i_argv, modules, NULL, NULL);
         }
         return OPT_EXIT_OK(0);
     }
@@ -531,40 +568,18 @@ static int parse_option(int opt, const char *arg, int *i_argv, const opt_config_
 }
 
 int main(int argc, char *const* argv) {
-    log_t           log = { .level = LOG_LVL_VERBOSE, .out = stderr, .flags = LOG_FLAG_NONE, .prefix = NULL };
     ctx_t           ctx = {
-        .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .alternatefile = NULL, .outfd = -1, .infd = -1, .log = &log,
-        .outfile = NULL, .infile = NULL, .uid = 0, .gid = 0, .priority = 0, .i_argv_program = 0,
+        .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .alternatefile = NULL, .outfd = -1, .infd = -1,
+        .logs = logpool_create(), .outfile = NULL, .infile = NULL, .uid = 0, .gid = 0, .priority = 0, .i_argv_program = 0,
     };
-    opt_config_t    opt_config  = { argc, argv, parse_option_first_pass, s_opt_desc, OPT_FLAG_SILENT, VERSION_STRING, &ctx, NULL };
+    opt_config_t    opt_config  = { argc, argv, parse_option_first_pass, s_opt_desc, OPT_FLAG_DEFAULT, VERSION_STRING, &ctx, NULL };
     char **         newargv = NULL;
     int             ret = 0;
 
-    log_set_vlib_instance(&log);
     /* Manage program options: first pass on command line to set redirections, in silent mode:
      * nothing has to be written on stdout/stderr until set_redirections() is called */
-    for ( ; ; ) {
-        if (OPT_IS_EXIT(ret = opt_parse_options(&opt_config)) && opt_config.callback != parse_option_first_pass) {
-            return clean_ctx(OPT_EXIT_CODE(ret), &ctx);
-        }
-        if (opt_config.callback != parse_option_first_pass)
-            break ;
-        opt_config.callback = parse_option;
-        opt_config.flags &= ~OPT_FLAG_SILENT;
-        /* setup of setout/stderr redirections so that we can use them blindly */
-        if (set_redirections(&ctx) != 0) {
-            /* see comment inside set_redirections() method. Safest thing is to not display anything
-             * on error. Error here is rare, but... TODO */
-            fprintf((ctx.flags & (TIME_POSIX | TIME_EXT)) == 0 ? stderr
-                         : (ctx.flags & TO_STDERR) != 0 ? stdout : stderr,
-                    "set_redirections(dup|dup2|open): %s\n", strerror(errno));
-            exit(clean_ctx(ERR_REDIR, &ctx));
-        }
-        if ((ctx.flags & WARN_MOREREDIRS) != 0) {
-            fprintf(stderr, "warning, conflicting '-1' and '-2' options, taking the last one: '%s'\n",
-                    (ctx.flags & TO_STDERR) != 0 ? "-2" : "-1");
-        }
-        /* loop for the second pass on command line */
+    if (OPT_IS_EXIT(ret = opt_parse_options_2pass(&opt_config, parse_option))) {
+        return clean_ctx(OPT_EXIT_CODE(ret), &ctx);
     }
 
     /* clean now unnecessary resources */
