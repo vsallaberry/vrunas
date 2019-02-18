@@ -9,6 +9,8 @@
 /_src_.c
 /_src_.z.c
 /build.h
+/build.make
+/configure.log
 /core
 /core.[0-9]*[0-9]
 /obj/
