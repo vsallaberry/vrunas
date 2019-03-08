@@ -407,7 +407,7 @@ static int do_bench(ctx_t * ctx) {
 }
 
 /** parse_option_first_pass() : option callback of type opt_option_callback_t. see vlib/options.h */
-static int parse_option_first_pass(int opt, const char *arg, int *i_argv, const opt_config_t * opt_config) {
+static int parse_option_first_pass(int opt, const char *arg, int *i_argv, opt_config_t * opt_config) {
     ctx_t * ctx = opt_config ? (ctx_t *) opt_config->user_data : NULL;
     log_t * log;
     (void) i_argv;
@@ -461,7 +461,7 @@ static int parse_option_first_pass(int opt, const char *arg, int *i_argv, const 
 }
 
 /** parse_option() : option callback of type opt_option_callback_t. see vlib/options.h */
-static int parse_option(int opt, const char *arg, int *i_argv, const opt_config_t * opt_config) {
+static int parse_option(int opt, const char *arg, int *i_argv, opt_config_t * opt_config) {
     const char * const  modules[]   = { "vlib", "options", "*", NULL };
     ctx_t *             ctx         = opt_config ? (ctx_t *) opt_config->user_data : NULL;
     (void) arg;
@@ -572,7 +572,7 @@ int main(int argc, char *const* argv) {
         .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .alternatefile = NULL, .outfd = -1, .infd = -1,
         .logs = logpool_create(), .outfile = NULL, .infile = NULL, .uid = 0, .gid = 0, .priority = 0, .i_argv_program = 0,
     };
-    opt_config_t    opt_config  = { argc, argv, parse_option_first_pass, s_opt_desc, OPT_FLAG_DEFAULT, VERSION_STRING, &ctx, NULL };
+    opt_config_t    opt_config  = OPT_INITIALIZER(argc, argv, parse_option_first_pass, s_opt_desc, VERSION_STRING, &ctx);
     char **         newargv = NULL;
     int             ret = 0;
 
