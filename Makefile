@@ -75,7 +75,7 @@ PREFIX		= /usr/local
 INSTALL_FILES	= $(BIN)
 
 # CONFIG_CHECK = all zlib ncurses libcrypto applecrypto openssl sigqueue sigrtmin
-#                libcrypt crypt.h crypt_gnu crypt_des_ext
+#                libcrypt crypt.h crypt_gnu crypt_des_ext libintl
 # If a feature is prefixed with '+' (eg: +openssl), this makes it MANDATORY
 # and make will fail if the feature is not available
 CONFIG_CHECK	= zlib ncurses
@@ -105,8 +105,6 @@ FLAGS_GCJ	=
 # Some other flags: ARCH(-arch i386 -arch x86_64), WARN(-Werror), OPTI(-gdwarf -g3), ...
 
 # FLAGS_<lang>_<file> is specific to one file (eg:'FLAGS_CXX_Big.cc=-O0','FLAGS_C_src/a.c=-O1')
-#FLAGS_YACC_parse-test.y = -py0 # no more needed as yacc/lex rules search for BCOMPAT_YYPREFIX and add -p<prefix>
-#FLAGS_YACC_parse-test2.yy = -py1 # no more needed as yacc/lex rules search for BCOMPAT_YYPREFIX and add -p<prefix>
 
 # System specific flags (WARN_$(sys),OPTI_$(sys),DEBUG_$(sys),LIBS_$(sys),INCS_$(sys))
 # $(sys) is lowcase(`uname`), eg: 'LIBS_darwin=-framework IOKit -framework Foundation'
