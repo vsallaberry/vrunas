@@ -437,8 +437,7 @@ static int parse_option_first_pass(int opt, const char *arg, int *i_argv, opt_co
                  log_t vlog = { .level = LOG_LVL_VERBOSE, .out = stderr, .flags = LOG_FLAG_NONE, .prefix = NULL };
                  log_set_vlib_instance(logpool_add(ctx->logs, &vlog, NULL));
             }
-            ((opt_config_t *) opt_config)->log  //FIXME cast
-                = logpool_getlog(ctx->logs, "options", LPG_NODEFAULT);
+            opt_config->log = logpool_getlog(ctx->logs, "options", LPG_NODEFAULT);
             /* setup of setout/stderr redirections so that we can use them blindly */
             if (set_redirections(ctx) != 0) {
                 /* see comment inside set_redirections() method. Safest thing is to not display anything
