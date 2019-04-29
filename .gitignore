@@ -1,3 +1,4 @@
+*.ali
 *.class
 *.d
 *.o
@@ -20,3 +21,4 @@
 /vrunas
 /vrunas.core
 /vrunas.dSYM
+_ada-stub_.ad[bs]
