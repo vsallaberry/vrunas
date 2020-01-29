@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2018-2019 Vincent Sallaberry
+# Copyright (C) 2018-2020 Vincent Sallaberry
 # vrunas <https://github.com/vsallaberry/vrunas>
 #
 #   from vlib Makefile Copyright (C) 2017-2019 Vincent Sallaberry
