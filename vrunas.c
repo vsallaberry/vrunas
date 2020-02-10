@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2019 Vincent Sallaberry
+ * Copyright (C) 2018-2020 Vincent Sallaberry
  * vrunas <https://github.com/vsallaberry/vrunas>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -44,9 +44,10 @@
 #include "vlib/log.h"
 #include "vlib/logpool.h"
 #include "vlib/util.h"
+#include "vlib/term.h"
 
 #define VERSION_STRING OPT_VERSION_STRING_GPL3PLUS(BUILD_APPNAME, APP_VERSION, \
-                                    "git:" BUILD_GITREV, "Vincent Sallaberry", "2018-2019")
+                                    "git:" BUILD_GITREV, "Vincent Sallaberry", "2018-2020")
 
 static const opt_options_desc_t s_opt_desc[] = {
     { OPT_ID_SECTION, NULL, "options", "Options:" },
@@ -137,6 +138,7 @@ typedef struct {
 
 static int clean_ctx(int ret, ctx_t * ctx) {
     if (ctx) {
+        vterm_enable(0);
         if (ctx->logs != NULL) {
             logpool_free(ctx->logs);
         }
@@ -161,17 +163,25 @@ static int clean_ctx(int ret, ctx_t * ctx) {
 }
 
 int set_uidgid(uid_t uid, gid_t gid, ctx_t * ctx) {
+    int errno_bak;
+
     /* set gid if given */
     if ((ctx->flags & HAVE_GID) != 0) {
         if (setgid(gid) < 0) {
-            fprintf(stderr, "`%lu` (setgid): %s\n", (unsigned long) gid, strerror(errno));
+            errno_bak = errno;
+            vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
+            fprintf(stderr, "error%s: `%lu` (setgid): %s\n",
+                    vterm_color(STDERR_FILENO, VCOLOR_RESET), (unsigned long) gid, strerror(errno_bak));
             return ERR_SETID;
         }
     }
     /* set uid if given */
     if ((ctx->flags & HAVE_UID) != 0) {
         if (setuid(uid) < 0) {
-            fprintf(stderr, "`%lu` (setuid): %s\n", (unsigned long) uid, strerror(errno));
+            errno_bak = errno;
+            vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
+            fprintf(stderr, "error%s: `%lu` (setuid): %s\n",
+                    vterm_color(STDERR_FILENO, VCOLOR_RESET), (unsigned long) uid, strerror(errno_bak));
             return ERR_SETID;
         }
     }
@@ -180,10 +190,14 @@ int set_uidgid(uid_t uid, gid_t gid, ctx_t * ctx) {
 
 char ** build_argv(int argc, char * const * argv, ctx_t * ctx) {
     char ** newargv, ** tmp;
+    int errno_bak;
     (void)ctx;
 
     if ((tmp = newargv = malloc(argc + 1)) == NULL) {
-        fprintf(stderr, "build_argv(malloc) : %s\n", strerror(errno));
+        errno_bak = errno;
+        vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
+        fprintf(stderr, "error%s: build_argv(malloc) : %s\n",
+                vterm_color(STDERR_FILENO, VCOLOR_RESET), strerror(errno_bak));
         return NULL;
     }
     while (argc--)  {
@@ -238,6 +252,7 @@ int set_redirections(ctx_t * ctx) {
 int set_out(const char * file, ctx_t * ctx) {
     int open_flags = O_WRONLY | O_CREAT;
     int fd;
+    int errno_bak;
 
     if (file == NULL)
         return 0;
@@ -248,19 +263,28 @@ int set_out(const char * file, ctx_t * ctx) {
         open_flags |= O_TRUNC;
 
     if ((fd = open(file, open_flags, (S_IWUSR | S_IRUSR | S_IRGRP /* | S_IROTH */ ))) < 0) {
+        errno_bak = errno;
         /* error */
-        fprintf(stderr, "set_out(open), %s: %s\n", file, strerror(errno));
+        vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
+        fprintf(stderr, "error%s: set_out(open), %s: %s\n",
+                vterm_color(STDERR_FILENO, VCOLOR_RESET), file, strerror(errno_bak));
         return -1;
     }
 
     /* redirect always stdout to file. redirect stderr if -1 or -2 is given */
     if ((ctx->flags & (TO_STDERR | TO_STDOUT)) != 0 && dup2(fd, STDERR_FILENO) < 0) {
-        fprintf(stderr, "set_out(dup2 stderr): %s\n", strerror(errno));
+        errno_bak = errno;
+        vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
+        fprintf(stderr, "error%s: set_out(dup2 stderr): %s\n",
+                vterm_color(STDERR_FILENO, VCOLOR_RESET), strerror(errno_bak));
         close(fd);
         return -1;
     }
     if (dup2(fd, STDOUT_FILENO) < 0) {
-        fprintf(stdout, "set_out(dup2 stdout): %s\n", strerror(errno));
+        errno_bak = errno;
+        vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
+        fprintf(stdout, "error%s: set_out(dup2 stdout): %s\n",
+                vterm_color(STDERR_FILENO, VCOLOR_RESET), strerror(errno_bak));
         close(fd);
         return -1;
     }
@@ -269,16 +293,23 @@ int set_out(const char * file, ctx_t * ctx) {
 
 int set_in(const char * file, ctx_t * ctx) {
     int fd;
+    int errno_bak;
     (void) ctx;
 
     if (file == NULL)
         return 0;
     if ((fd = open(file, O_RDONLY)) < 0) {
-        fprintf(stderr, "set_in(open): %s\n", strerror(errno));
+        errno_bak = errno;
+        vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
+        fprintf(stderr, "error%s: set_in(open): %s\n",
+                vterm_color(STDERR_FILENO, VCOLOR_RESET), strerror(errno_bak));
         return -1;
     }
     if (dup2(fd, STDIN_FILENO) < 0) {
-        fprintf(stderr, "set_in(dup2 stdin): %s\n", strerror(errno));
+        errno_bak = errno;
+        vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
+        fprintf(stderr, "error%s: set_in(dup2 stdin): %s\n",
+                vterm_color(STDERR_FILENO, VCOLOR_RESET), strerror(errno_bak));
         close(fd);
         return -1;
     }
@@ -434,7 +465,7 @@ static int parse_option_first_pass(int opt, const char *arg, int *i_argv, opt_co
             if ((log = logpool_getlog(ctx->logs, "vlib", LPG_NODEFAULT)) != NULL) {
                 log_set_vlib_instance(log);
             } else {
-                 log_t vlog = { .level = LOG_LVL_VERBOSE, .out = stderr, .flags = LOG_FLAG_NONE, .prefix = NULL };
+                 log_t vlog = { .level = LOG_LVL_INFO, .out = stderr, .flags = LOG_FLAG_NONE, .prefix = NULL };
                  log_set_vlib_instance(logpool_add(ctx->logs, &vlog, NULL));
             }
             opt_config->log = logpool_getlog(ctx->logs, "options", LPG_NODEFAULT);
@@ -448,7 +479,9 @@ static int parse_option_first_pass(int opt, const char *arg, int *i_argv, opt_co
                 exit(clean_ctx(ERR_REDIR, ctx));
             }
             if ((ctx->flags & WARN_MOREREDIRS) != 0) {
-                fprintf(stderr, "warning, conflicting '-1' and '-2' options, taking the last one: '%s'\n",
+                vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_YELLOW, VCOLOR_EMPTY, VCOLOR_EMPTY));
+                fprintf(stderr, "warning%s, conflicting '-1' and '-2' options, taking the last one: '%s'\n",
+                        vterm_color(STDERR_FILENO, VCOLOR_RESET),
                         (ctx->flags & TO_STDERR) != 0 ? "-2" : "-1");
             }
             break ;
@@ -486,27 +519,36 @@ static int parse_option(int opt, const char *arg, int *i_argv, opt_config_t * op
             errno = 0;
             tmp = strtol(arg, &endptr, 0);
             if (errno != 0 || *endptr != 0) {
-                fprintf(stderr, "error, bad priority '%s'\n", arg);
+                vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
+                fprintf(stderr, "error%s, bad priority '%s'\n",
+                        vterm_color(STDERR_FILENO, VCOLOR_RESET), arg);
                 return OPT_ERROR(ERR_OPTION+11);
             }
-            if ((ctx->flags & HAVE_PRIORITY) != 0)
-                fprintf(stderr, "warning, overriding previous priority '%d' with new value '%d'\n",
-                        ctx->priority, tmp);
+            if ((ctx->flags & HAVE_PRIORITY) != 0) {
+                vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_YELLOW, VCOLOR_EMPTY, VCOLOR_EMPTY));
+                fprintf(stderr, "warning%s, overriding previous priority '%d' with new value '%d'\n",
+                        vterm_color(STDERR_FILENO, VCOLOR_RESET), ctx->priority, tmp);
+            }
             ctx->priority = tmp;
             ctx->flags |= HAVE_PRIORITY;
             break ;
         case 'i':
-            if (ctx->infile != NULL)
-                fprintf(stderr, "warning, overriding previous '-%c %s' with '-%c %s'\n",
-                        opt, ctx->infile, opt, arg);
+            if (ctx->infile != NULL) {
+                vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_YELLOW, VCOLOR_EMPTY, VCOLOR_EMPTY));
+                fprintf(stderr, "warning%s, overriding previous '-%c %s' with '-%c %s'\n",
+                        vterm_color(STDERR_FILENO, VCOLOR_RESET), opt, ctx->infile, opt, arg);
+            }
             ctx->infile = arg;
             break ;
         case 'N': ctx->flags |= FILE_NEWIDENTITY; break ;
         case 'o':
         case 'O':
-            if (ctx->outfile != NULL)
-                fprintf(stderr, "warning, overriding previous '-%c %s' with '-%c %s'\n",
+            if (ctx->outfile != NULL) {
+                vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_YELLOW, VCOLOR_EMPTY, VCOLOR_EMPTY));
+                fprintf(stderr, "warning%s, overriding previous '-%c %s' with '-%c %s'\n",
+                        vterm_color(STDERR_FILENO, VCOLOR_RESET),
                         (ctx->flags & OUT_APPEND) != 0 ? 'O' : 'o', ctx->outfile, opt, arg);
+            }
             if (opt == 'O')
                 ctx->flags |= OUT_APPEND;
             else
@@ -514,36 +556,54 @@ static int parse_option(int opt, const char *arg, int *i_argv, opt_config_t * op
             ctx->outfile = arg;
             break ;
         case 'u':
-            if ((ctx->flags & HAVE_UID) != 0)
-                fprintf(stderr, "warning, overriding previous `-u` parameter with new value `%s`\n", arg);
+            if ((ctx->flags & HAVE_UID) != 0) {
+                vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_YELLOW, VCOLOR_EMPTY, VCOLOR_EMPTY));
+                fprintf(stderr, "warning%s, overriding previous `-u` parameter with new value `%s`\n",
+                        vterm_color(STDERR_FILENO, VCOLOR_RESET), arg);
+            }
             errno = 0;
             tmpuid = strtol(arg, &endptr, 0);
             if ((errno != 0 || !endptr || *endptr != 0)
-            &&  pwfindid_r(arg, &tmpuid, &ctx->buf, &ctx->bufsz) != 0)
+            &&  pwfindid_r(arg, &tmpuid, &ctx->buf, &ctx->bufsz) != 0) {
+                vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
+                fprintf(stderr, "error%s: pwfindid_r(%s): invalid user\n", vterm_color(STDERR_FILENO, VCOLOR_RESET), arg);
                 return OPT_ERROR(ERR_OPTION+7);
+            }
             ctx->flags |= HAVE_UID;
             ctx->uid = tmpuid;
             break ;
         case 'U':
-            if (pwfindid_r(arg, &tmpuid, &ctx->buf, &ctx->bufsz) != 0)
+            if (pwfindid_r(arg, &tmpuid, &ctx->buf, &ctx->bufsz) != 0) {
+                vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
+                fprintf(stderr, "error%s: pwfindid_r(%s): invalid user\n", vterm_color(STDERR_FILENO, VCOLOR_RESET), arg);
                 return OPT_ERROR(ERR_OPTION+5);
+            }
             ctx->flags |= OPTIONAL_ARGS;
             fprintf(stdout, "%d\n", (int) tmpuid);
             break ;
         case 'g':
-            if ((ctx->flags & HAVE_GID) != 0)
-                fprintf(stderr, "warning, overriding previous `-g` parameter with new value `%s`\n", arg);
+            if ((ctx->flags & HAVE_GID) != 0) {
+                vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_YELLOW, VCOLOR_EMPTY, VCOLOR_EMPTY));
+                fprintf(stderr, "warning%s, overriding previous `-g` parameter with new value `%s`\n",
+                        vterm_color(STDERR_FILENO, VCOLOR_RESET), arg);
+            }
             errno = 0;
             tmpgid = strtol(arg, &endptr, 0);
             if ((errno != 0 || !endptr || *endptr != 0)
-            &&  grfindid_r(arg, &tmpgid, &ctx->buf, &ctx->bufsz) != 0)
+            &&  grfindid_r(arg, &tmpgid, &ctx->buf, &ctx->bufsz) != 0) {
+                vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
+                fprintf(stderr, "error%s: grfindid_r(%s): invalid group\n", vterm_color(STDERR_FILENO, VCOLOR_RESET), arg);
                 return OPT_ERROR(ERR_OPTION+3);
+            }
             ctx->flags |= HAVE_GID;
             ctx->gid = tmpgid;
             break ;
         case 'G':
-            if (grfindid_r(arg, &tmpgid, &ctx->buf, &ctx->bufsz) != 0)
+            if (grfindid_r(arg, &tmpgid, &ctx->buf, &ctx->bufsz) != 0) {
+                vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
+                fprintf(stderr, "error%s: grfindid_r(%s): invalid group\n", vterm_color(STDERR_FILENO, VCOLOR_RESET), arg);
                 return OPT_ERROR(ERR_OPTION+1);
+            }
             ctx->flags |= OPTIONAL_ARGS;
             fprintf(stdout, "%d\n", (int) tmpgid);
             break ;
@@ -574,6 +634,7 @@ int main(int argc, char *const* argv) {
     opt_config_t    opt_config  = OPT_INITIALIZER(argc, argv, parse_option_first_pass, s_opt_desc, VERSION_STRING, &ctx);
     char **         newargv = NULL;
     int             ret = 0;
+    int             errno_bak;
 
     /* Manage program options: first pass on command line to set redirections, in silent mode:
      * nothing has to be written on stdout/stderr until set_redirections() is called */
@@ -591,7 +652,8 @@ int main(int argc, char *const* argv) {
         if (ctx.i_argv_program == 0 || ctx.i_argv_program >= argc) {
             if ((ctx.flags & OPTIONAL_ARGS) != 0 && ((ret = 0) || 1))
                 break ;
-            fprintf(stderr, "error: missing program\n");
+            vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
+            fprintf(stderr, "error%s: missing program\n", vterm_color(STDERR_FILENO, VCOLOR_RESET));
             ret = opt_usage(OPT_ERROR(ERR_PROG_MISSING), &opt_config, NULL);
             break ;
         }
@@ -599,8 +661,11 @@ int main(int argc, char *const* argv) {
         fprintf(stdout, VERSION_STRING "\n\n");
         /* prepare priority, uid, gid, newargv, outfile, bench for excvp */
         if ((ctx.flags & HAVE_PRIORITY) != 0 && setpriority(PRIO_PROCESS, getpid(), ctx.priority) < 0) {
+            errno_bak = errno;
             ret = ERR_PRIORITY;
-            fprintf(stderr, "setpriority(%d): %s\n", ctx.priority, strerror(errno));
+            vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
+            fprintf(stderr, "error%s: setpriority(%d): %s\n",
+                    vterm_color(STDERR_FILENO, VCOLOR_RESET), ctx.priority, strerror(errno_bak));
             break ;
         }
         if ((ctx.flags & FILE_NEWIDENTITY) != 0 && set_uidgid(ctx.uid, ctx.gid, &ctx) != 0 && ((ret = ERR_SETID) || 1))
@@ -617,8 +682,11 @@ int main(int argc, char *const* argv) {
             break ;
         /* execvp, in, if needed, a forked process */
         if (execvp(*newargv, newargv) < 0) {
+            errno_bak = errno;
             ret = ERR_EXEC;
-            fprintf(stderr, "`%s` (execvp): %s\n", *newargv, strerror(errno));
+            vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
+            fprintf(stderr, "error%s: `%s` (execvp): %s\n",
+                    vterm_color(STDERR_FILENO, VCOLOR_RESET), *newargv, strerror(errno_bak));
             break ;
         }
         /* not reachable */
