@@ -46,33 +46,33 @@
 #include "vlib/util.h"
 #include "vlib/term.h"
 
-#define VERSION_STRING OPT_VERSION_STRING_GPL3PLUS(BUILD_APPNAME, APP_VERSION, \
-                                    "git:" BUILD_GITREV, "Vincent Sallaberry", "2018-2020")
+#define VERSION_STRING(lic) lic(BUILD_APPNAME, APP_VERSION, \
+                                "git:" BUILD_GITREV, "Vincent Sallaberry", "2018-2020")
 
 static const opt_options_desc_t s_opt_desc[] = {
-    { OPT_ID_SECTION, NULL, "options", "Options:" },
-    { 'h', "help",          "[filter[,...]]","show help - " },
+    { OPT_ID_SECTION, NULL, "options", "\nOptions:" },
+    { 'h', "help",          "[filter[,...]]","summary or full usage of filter, use '-hh'\r" },
     { 'V', "version",       NULL,           "show version" },
     { 's', "source",        NULL,           "show source code" },
     { 'l', "log-level", "level",            "Set log level "
-                                            "[module1=]level1[@file1][:flag1[|flag2]][,...]." },
+                                            "[mod1=]lvl1[@file1][:flag1[|..]][,..]\r" },
     { 'u', "user",          "uid|user",     "change uid" },
     { 'g', "group",         "gid|group",    "change gid" },
-    { 'U', "print-uid",     "user",         "print uid of user, no program and arguments required." },
-    { 'G', "print-gid",     "group",        "print gid of group, no program and arguments required." },
+    { 'U', "print-uid",     "user",         "print uid of user, no program/arguments required." },
+    { 'G', "print-gid",     "group",        "print gid of group, no program/arguments required." },
     { '1', "to-stdout",     NULL,           "redirect program stderr to stdout" },
     { '2', "to-stderr",     NULL,           "redirect program stdout to stderr" },
         /* "  -1|-2        : redirect program stderr or stdout to respectively stdout(-1) or stderr(-2)" */
-    { 't', "time",          NULL,           "print timings of program ('time -p' POSIX format). "
-                                            "With -1: timings will be printed to stderr, "
-                                            "With -2: to stdout, otherwise, to stderr.\nTo put timings in "
+    { 't', "time",          NULL,           "print timings of program ('time -p' POSIX format).\r"
+                                            "With -1: timings will be printed to stderr,\r"
+                                            "With -2: to stdout, otherwise, to stderr.\rTo put timings in "
                                             "variable and display command: '$ t=`vrunas -2 -t ls -R /`'" },
     { 'T', "time-extended", NULL,           "same as -t/--time but with extended format." },
         /* "  -t|-T        : print timings of program (-t:'time -p' POSIX, -T:extended)\n"
             "                 With -1: timings will be printed to stderr.\n"
             "                 With -2: to stdout, otherwise, to stderr. To put timings in\n"
             "                 variable and display command: '$ t=`vrunas -2 -t ls -R /`'\n" */
-    { 'o', "output",        "file",         "redirect program stdout to file.\n"
+    { 'o', "output",        "file",         "redirect program stdout to file.\r"
                                             "With -1 or -2, program stderr AND stdout are redirected to file" },
     { 'O', "append-to",     "file",         "same as -o/--output but append to file" },
         /*  "  -o|-O file   : redirect program stdout to file (-O:append).\n"
@@ -566,7 +566,8 @@ static int parse_option(int opt, const char *arg, int *i_argv, opt_config_t * op
             if ((errno != 0 || !endptr || *endptr != 0)
             &&  pwfindid_r(arg, &tmpuid, &ctx->buf, &ctx->bufsz) != 0) {
                 vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
-                fprintf(stderr, "error%s: pwfindid_r(%s): invalid user\n", vterm_color(STDERR_FILENO, VCOLOR_RESET), arg);
+                fprintf(stderr, "error%s: pwfindid_r(%s): invalid user\n",
+                        vterm_color(STDERR_FILENO, VCOLOR_RESET), arg);
                 return OPT_ERROR(ERR_OPTION+7);
             }
             ctx->flags |= HAVE_UID;
@@ -575,7 +576,8 @@ static int parse_option(int opt, const char *arg, int *i_argv, opt_config_t * op
         case 'U':
             if (pwfindid_r(arg, &tmpuid, &ctx->buf, &ctx->bufsz) != 0) {
                 vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
-                fprintf(stderr, "error%s: pwfindid_r(%s): invalid user\n", vterm_color(STDERR_FILENO, VCOLOR_RESET), arg);
+                fprintf(stderr, "error%s: pwfindid_r(%s): invalid user\n",
+                        vterm_color(STDERR_FILENO, VCOLOR_RESET), arg);
                 return OPT_ERROR(ERR_OPTION+5);
             }
             ctx->flags |= OPTIONAL_ARGS;
@@ -592,7 +594,8 @@ static int parse_option(int opt, const char *arg, int *i_argv, opt_config_t * op
             if ((errno != 0 || !endptr || *endptr != 0)
             &&  grfindid_r(arg, &tmpgid, &ctx->buf, &ctx->bufsz) != 0) {
                 vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
-                fprintf(stderr, "error%s: grfindid_r(%s): invalid group\n", vterm_color(STDERR_FILENO, VCOLOR_RESET), arg);
+                fprintf(stderr, "error%s: grfindid_r(%s): invalid group\n",
+                        vterm_color(STDERR_FILENO, VCOLOR_RESET), arg);
                 return OPT_ERROR(ERR_OPTION+3);
             }
             ctx->flags |= HAVE_GID;
@@ -601,7 +604,8 @@ static int parse_option(int opt, const char *arg, int *i_argv, opt_config_t * op
         case 'G':
             if (grfindid_r(arg, &tmpgid, &ctx->buf, &ctx->bufsz) != 0) {
                 vterm_putcolor(stderr, VCOLOR_BUILD(VCOLOR_RED, VCOLOR_EMPTY, VCOLOR_BOLD));
-                fprintf(stderr, "error%s: grfindid_r(%s): invalid group\n", vterm_color(STDERR_FILENO, VCOLOR_RESET), arg);
+                fprintf(stderr, "error%s: grfindid_r(%s): invalid group\n",
+                        vterm_color(STDERR_FILENO, VCOLOR_RESET), arg);
                 return OPT_ERROR(ERR_OPTION+1);
             }
             ctx->flags |= OPTIONAL_ARGS;
@@ -615,7 +619,7 @@ static int parse_option(int opt, const char *arg, int *i_argv, opt_config_t * op
         case 'd': break ;
 #       endif
         case 'V':
-            fprintf(stdout, "%s\n\nWith:\n  %s\n\n", opt_config->version_string, vlib_get_version());
+            fprintf(stdout, "%s\n\nWith:\n  %s\n\n", VERSION_STRING(OPT_VERSION_STRING_GPL3PLUS_L), vlib_get_version());
             return OPT_EXIT_OK(0);
         case 'h': return opt_usage(OPT_EXIT_OK(0), opt_config, arg);
         case OPT_ID_ARG:
@@ -628,10 +632,12 @@ static int parse_option(int opt, const char *arg, int *i_argv, opt_config_t * op
 
 int main(int argc, char *const* argv) {
     ctx_t           ctx = {
-        .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0, .alternatefile = NULL, .outfd = -1, .infd = -1,
-        .logs = logpool_create(), .outfile = NULL, .infile = NULL, .uid = 0, .gid = 0, .priority = 0, .i_argv_program = 0,
+        .flags = 0, .argc = argc, .argv = argv, .buf = NULL, .bufsz = 0,
+        .alternatefile = NULL, .outfd = -1, .infd = -1, .outfile = NULL, .infile = NULL,
+        .logs = logpool_create(), .uid = 0, .gid = 0, .priority = 0, .i_argv_program = 0,
     };
-    opt_config_t    opt_config  = OPT_INITIALIZER(argc, argv, parse_option_first_pass, s_opt_desc, VERSION_STRING, &ctx);
+    opt_config_t    opt_config  = OPT_INITIALIZER(argc, argv, parse_option_first_pass, s_opt_desc,
+                                                  VERSION_STRING(OPT_VERSION_STRING_GPL3PLUS), &ctx);
     char **         newargv = NULL;
     int             ret = 0;
     int             errno_bak;
@@ -658,7 +664,7 @@ int main(int argc, char *const* argv) {
             break ;
         }
         /* program header */
-        fprintf(stdout, VERSION_STRING "\n\n");
+        fprintf(stdout, "%s\n\n", opt_config.version_string);
         /* prepare priority, uid, gid, newargv, outfile, bench for excvp */
         if ((ctx.flags & HAVE_PRIORITY) != 0 && setpriority(PRIO_PROCESS, getpid(), ctx.priority) < 0) {
             errno_bak = errno;
