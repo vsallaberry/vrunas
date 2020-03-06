@@ -53,8 +53,8 @@ static const opt_options_desc_t s_opt_desc[] = {
     { OPT_ID_SECTION, NULL, "options", "\nOptions:" },
     { 'h', "help",          "[filter[,...]]","summary or full usage of filter, use '-hh'\r" },
     { 'V', "version",       NULL,           "show version" },
-    { 's', "source",        NULL,           "show source code" },
-    { 'l', "log-level", "level",            "Set log level "
+    { 's', "source",        "[project/file]","show source (fnmatch shell pattern)." },
+    { 'l', "log-level",     "level",        "Set log level "
                                             "[mod1=]lvl1[@file1][:flag1[|..]][,..]\r" },
     { 'u', "user",          "uid|user",     "change uid" },
     { 'g', "group",         "gid|group",    "change gid" },
@@ -612,9 +612,8 @@ static int parse_option(int opt, const char *arg, int *i_argv, opt_config_t * op
             fprintf(stdout, "%d\n", (int) tmpgid);
             break ;
         case 's':
-           vrunas_get_source(stdout, NULL, 0, NULL);
-           vlib_get_source(stdout, NULL, 0, NULL);
-           break ;
+            opt_filter_source(stdout, arg, vrunas_get_source, vlib_get_source, NULL);
+            return OPT_EXIT_OK(0);
 #       ifdef _TEST
         case 'd': break ;
 #       endif
