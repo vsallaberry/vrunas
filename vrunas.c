@@ -53,7 +53,8 @@ static const opt_options_desc_t s_opt_desc[] = {
     { OPT_ID_SECTION, NULL, "options", "\nOptions:" },
     { 'h', "help",          "[filter[,...]]","summary or full usage of filter, use '-hh'\r" },
     { 'V', "version",       NULL,           "show version" },
-    { 's', "source",        "[project/file]","show source (fnmatch shell pattern)." },
+    { 's', "source",        "[[:]pattern]", "show source - pattern: <project/file> or :<text> "
+                            "(fnmatch(3) shell pattern)." },
     { 'l', "log-level",     "level",        "Set log level "
                                             "[mod1=]lvl1[@file1][:flag1[|..]][,..]\r" },
     { 'u', "user",          "uid|user",     "change uid" },
@@ -462,13 +463,13 @@ static int parse_option_first_pass(int opt, const char *arg, int *i_argv, opt_co
                 return OPT_ERROR(OPT_EBADARG);
             break ;
         case OPT_ID_END:
-            if ((log = logpool_getlog(ctx->logs, "vlib", LPG_NODEFAULT)) != NULL) {
+            if ((log = logpool_getlog(ctx->logs, "vlib", LPG_NODEFAULT | LPG_TRUEPREFIX)) != NULL) {
                 log_set_vlib_instance(log);
             } else {
                  log_t vlog = { .level = LOG_LVL_INFO, .out = stderr, .flags = LOG_FLAG_NONE, .prefix = NULL };
                  log_set_vlib_instance(logpool_add(ctx->logs, &vlog, NULL));
             }
-            opt_config->log = logpool_getlog(ctx->logs, "options", LPG_NODEFAULT);
+            opt_config->log = logpool_getlog(ctx->logs, "options", LPG_NODEFAULT | LPG_TRUEPREFIX);
             /* setup of setout/stderr redirections so that we can use them blindly */
             if (set_redirections(ctx) != 0) {
                 /* see comment inside set_redirections() method. Safest thing is to not display anything
